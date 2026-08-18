@@ -3,6 +3,9 @@ package main
 import (
 	"reflect"
 	"testing"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 func TestSplitSQL(t *testing.T) {
@@ -79,5 +82,29 @@ func TestSplitSQL(t *testing.T) {
 				t.Fatalf("splitSQL()\n got=%#v\nwant=%#v", got, c.want)
 			}
 		})
+	}
+}
+
+type blockingClickHouseConn struct {
+	driver.Conn
+	release <-chan struct{}
+}
+
+func (c blockingClickHouseConn) Close() error {
+	<-c.release
+	return nil
+}
+
+func TestCloseClickHouseConnTimesOut(t *testing.T) {
+	release := make(chan struct{})
+	start := time.Now()
+	closed := closeClickHouseConn(blockingClickHouseConn{release: release}, 10*time.Millisecond)
+	close(release)
+
+	if closed {
+		t.Fatal("closeClickHouseConn() reported a blocked connection as closed")
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("closeClickHouseConn() exceeded its timeout: %s", elapsed)
 	}
 }
