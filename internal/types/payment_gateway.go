@@ -9,6 +9,7 @@ type PaymentGatewayType string
 
 const (
 	PaymentGatewayTypeStripe   PaymentGatewayType = "stripe"
+	PaymentGatewayTypePaystack PaymentGatewayType = "paystack"
 	PaymentGatewayTypeRazorpay PaymentGatewayType = "razorpay"
 	PaymentGatewayTypeNomod    PaymentGatewayType = "nomod"
 	PaymentGatewayTypeMoyasar  PaymentGatewayType = "moyasar"
@@ -19,7 +20,7 @@ const (
 // Validate validates the payment gateway type
 func (p PaymentGatewayType) Validate() error {
 	switch p {
-	case PaymentGatewayTypeStripe, PaymentGatewayTypeRazorpay, PaymentGatewayTypeNomod, PaymentGatewayTypeMoyasar, PaymentGatewayTypePaddle, PaymentGatewayTypeWhop:
+	case PaymentGatewayTypeStripe, PaymentGatewayTypePaystack, PaymentGatewayTypeRazorpay, PaymentGatewayTypeNomod, PaymentGatewayTypeMoyasar, PaymentGatewayTypePaddle, PaymentGatewayTypeWhop:
 		return nil
 	default:
 		return ierr.NewError("invalid payment gateway type").
@@ -27,6 +28,7 @@ func (p PaymentGatewayType) Validate() error {
 			WithReportableDetails(map[string]any{
 				"allowed": []PaymentGatewayType{
 					PaymentGatewayTypeStripe,
+					PaymentGatewayTypePaystack,
 					PaymentGatewayTypeRazorpay,
 					PaymentGatewayTypeNomod,
 					PaymentGatewayTypeMoyasar,

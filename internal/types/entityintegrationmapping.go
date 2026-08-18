@@ -55,6 +55,7 @@ type IntegrationProviderType string
 // Provider types
 const (
 	IntegrationProviderTypeStripe           IntegrationProviderType = "stripe"
+	IntegrationProviderTypePaystack         IntegrationProviderType = "paystack"
 	IntegrationProviderTypeRazorpay         IntegrationProviderType = "razorpay"
 	IntegrationProviderTypePaypal           IntegrationProviderType = "paypal"
 	IntegrationProviderTypeQuickBooks       IntegrationProviderType = "quickbooks"
@@ -69,6 +70,7 @@ const (
 func (p IntegrationProviderType) Validate() error {
 	allowed := []IntegrationProviderType{
 		IntegrationProviderTypeStripe,
+		IntegrationProviderTypePaystack,
 		IntegrationProviderTypeRazorpay,
 		IntegrationProviderTypePaypal,
 		IntegrationProviderTypeQuickBooks,

@@ -33,6 +33,7 @@ import (
 	"github.com/flexprice/flexprice/internal/integration/paddle"
 	paddlewebhook "github.com/flexprice/flexprice/internal/integration/paddle/webhook"
 	"github.com/flexprice/flexprice/internal/integration/payments"
+	"github.com/flexprice/flexprice/internal/integration/paystack"
 	"github.com/flexprice/flexprice/internal/integration/quickbooks"
 	quickbookswebhook "github.com/flexprice/flexprice/internal/integration/quickbooks/webhook"
 	"github.com/flexprice/flexprice/internal/integration/razorpay"
@@ -200,6 +201,16 @@ func (f *Factory) GetStripeIntegration(ctx context.Context) (*StripeIntegration,
 		PaymentSvc:     paymentSvc,
 		InvoiceSyncSvc: invoiceSyncSvc,
 		WebhookHandler: webhookHandler,
+	}, nil
+}
+
+func (f *Factory) GetPaystackIntegration(ctx context.Context) (*PaystackIntegration, error) {
+	client := paystack.NewClient(f.connectionRepo, f.encryptionService, f.logger)
+	paymentSvc := paystack.NewPaymentService(client, f.logger)
+	return &PaystackIntegration{
+		Client:         client,
+		PaymentSvc:     paymentSvc,
+		WebhookHandler: paystack.NewWebhookHandler(client, f.lifecycle, f.logger),
 	}, nil
 }
 
@@ -755,6 +766,8 @@ func (f *Factory) GetIntegrationByProvider(ctx context.Context, providerType typ
 	switch providerType {
 	case types.SecretProviderStripe:
 		return f.GetStripeIntegration(ctx)
+	case types.SecretProviderPaystack:
+		return f.GetPaystackIntegration(ctx)
 	case types.SecretProviderHubSpot:
 		return f.GetHubSpotIntegration(ctx)
 	case types.SecretProviderRazorpay:
@@ -789,6 +802,7 @@ func (f *Factory) GetIntegrationByProvider(ctx context.Context, providerType typ
 func (f *Factory) GetSupportedProviders() []types.SecretProvider {
 	return []types.SecretProvider{
 		types.SecretProviderStripe,
+		types.SecretProviderPaystack,
 		types.SecretProviderHubSpot,
 		types.SecretProviderRazorpay,
 		types.SecretProviderChargebee,
@@ -820,6 +834,16 @@ type StripeIntegration struct {
 	PaymentSvc     *stripe.PaymentService
 	InvoiceSyncSvc *stripe.InvoiceSyncService
 	WebhookHandler *webhook.Handler
+}
+
+type PaystackIntegration struct {
+	Client         paystack.Client
+	PaymentSvc     *paystack.PaymentService
+	WebhookHandler *paystack.WebhookHandler
+}
+
+func (p *PaystackIntegration) PullAndUpdateInvoice(ctx context.Context, invoiceID string) error {
+	return fmt.Errorf("invoice pull sync not supported for paystack")
 }
 
 func (s *StripeIntegration) PullAndUpdateInvoice(ctx context.Context, invoiceID string) error {
@@ -1120,6 +1144,18 @@ type StripeProvider struct {
 	integration *StripeIntegration
 }
 
+type PaystackProvider struct {
+	integration *PaystackIntegration
+}
+
+func (p *PaystackProvider) GetProviderType() types.SecretProvider {
+	return types.SecretProviderPaystack
+}
+
+func (p *PaystackProvider) IsAvailable(ctx context.Context) bool {
+	return p.integration.Client.HasConnection(ctx)
+}
+
 // GetProviderType returns the provider type
 func (p *StripeProvider) GetProviderType() types.SecretProvider {
 	return types.SecretProviderStripe
@@ -1230,6 +1266,15 @@ func (f *Factory) GetAvailableProviders(ctx context.Context) ([]IntegrationProvi
 		stripeProvider := &StripeProvider{integration: stripeIntegration}
 		if stripeProvider.IsAvailable(ctx) {
 			providers = append(providers, stripeProvider)
+		}
+	}
+
+	// Check Paystack
+	paystackIntegration, err := f.GetPaystackIntegration(ctx)
+	if err == nil {
+		paystackProvider := &PaystackProvider{integration: paystackIntegration}
+		if paystackProvider.IsAvailable(ctx) {
+			providers = append(providers, paystackProvider)
 		}
 	}
 
@@ -1376,6 +1421,12 @@ func (f *Factory) GetCheckoutProvider(ctx context.Context, provider types.Checko
 			return nil, err
 		}
 		return &razorpay.CheckoutAdapter{Svc: i.PaymentSvc, CustomerSvc: customerSvc, InvoiceSvc: invoiceSvc}, nil
+	case types.CheckoutPaymentProviderPaystack:
+		i, err := f.GetPaystackIntegration(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &paystack.CheckoutAdapter{Svc: i.PaymentSvc, CustomerSvc: customerSvc, InvoiceSvc: invoiceSvc}, nil
 	default:
 		return nil, ierr.NewError("payment provider not supported for checkout").
 			WithHintf("%s does not support hosted checkout sessions", provider).

@@ -14,6 +14,7 @@ type ConnectionMetadataType string
 
 const (
 	ConnectionMetadataTypeStripe         ConnectionMetadataType = "stripe"
+	ConnectionMetadataTypePaystack       ConnectionMetadataType = "paystack"
 	ConnectionMetadataTypeGeneric        ConnectionMetadataType = "generic"
 	ConnectionMetadataTypeS3             ConnectionMetadataType = "s3"
 	ConnectionMetadataTypeHubSpot        ConnectionMetadataType = "hubspot"
@@ -31,6 +32,7 @@ const (
 func (t ConnectionMetadataType) Validate() error {
 	allowedTypes := []ConnectionMetadataType{
 		ConnectionMetadataTypeStripe,
+		ConnectionMetadataTypePaystack,
 		ConnectionMetadataTypeGeneric,
 		ConnectionMetadataTypeS3,
 		ConnectionMetadataTypeHubSpot,
@@ -46,7 +48,7 @@ func (t ConnectionMetadataType) Validate() error {
 	}
 	if !lo.Contains(allowedTypes, t) {
 		return ierr.NewError("invalid connection metadata type").
-			WithHint("Connection metadata type must be one of: stripe, generic, s3, hubspot, razorpay, chargebee, nomod, moyasar, paddle, zoho_books, whop, aws_marketplace, gcp_marketplace").
+			WithHint("Connection metadata type must be one of: stripe, paystack, generic, s3, hubspot, razorpay, chargebee, nomod, moyasar, paddle, zoho_books, whop, aws_marketplace, gcp_marketplace").
 			Mark(ierr.ErrValidation)
 	}
 	return nil
@@ -58,6 +60,20 @@ type StripeConnectionMetadata struct {
 	SecretKey      string `json:"secret_key"`
 	WebhookSecret  string `json:"webhook_secret"`
 	AccountID      string `json:"account_id,omitempty"`
+}
+
+type PaystackConnectionMetadata struct {
+	PublicKey string `json:"public_key,omitempty"`
+	SecretKey string `json:"secret_key"`
+}
+
+func (p *PaystackConnectionMetadata) Validate() error {
+	if p.SecretKey == "" {
+		return ierr.NewError("secret_key is required").
+			WithHint("Paystack secret key is required").
+			Mark(ierr.ErrValidation)
+	}
+	return nil
 }
 
 // S3ConnectionMetadata represents S3-specific connection metadata (encrypted secrets only)
@@ -387,19 +403,19 @@ var zohoEndpointSuffixes = []string{
 func ValidateZohoEndpoint(raw, field string) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return ierr.NewError(field + " is required").
+		return ierr.NewError(field+" is required").
 			WithHintf("Zoho Books %s must be provided", field).
 			Mark(ierr.ErrValidation)
 	}
 
 	u, err := url.Parse(trimmed)
 	if err != nil {
-		return ierr.NewError(field + " must be a valid https URL").
+		return ierr.NewError(field+" must be a valid https URL").
 			WithHintf("Zoho Books %s must be an https URL", field).
 			Mark(ierr.ErrValidation)
 	}
 	if u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
-		return ierr.NewError(field + " must be a bare origin").
+		return ierr.NewError(field+" must be a bare origin").
 			WithHintf("Zoho Books %s must be a scheme and host only, with no path, query, fragment, or credentials", field).
 			Mark(ierr.ErrValidation)
 	}
@@ -687,6 +703,7 @@ func (g *GenericConnectionMetadata) Validate() error {
 // ConnectionMetadata represents structured connection metadata
 type ConnectionMetadata struct {
 	Stripe           *StripeConnectionMetadata          `json:"stripe,omitempty"`
+	Paystack         *PaystackConnectionMetadata        `json:"paystack,omitempty"`
 	S3               *S3ConnectionMetadata              `json:"s3,omitempty"`
 	HubSpot          *HubSpotConnectionMetadata         `json:"hubspot,omitempty"`
 	Razorpay         *RazorpayConnectionMetadata        `json:"razorpay,omitempty"`
@@ -715,6 +732,13 @@ func (c *ConnectionMetadata) Validate(providerType SecretProvider) error {
 				Mark(ierr.ErrValidation)
 		}
 		return c.Stripe.Validate()
+	case SecretProviderPaystack:
+		if c.Paystack == nil {
+			return ierr.NewError("paystack metadata is required").
+				WithHint("Paystack metadata is required for paystack provider").
+				Mark(ierr.ErrValidation)
+		}
+		return c.Paystack.Validate()
 	case SecretProviderS3:
 		if c.S3 == nil {
 			return ierr.NewError("s3 metadata is required").

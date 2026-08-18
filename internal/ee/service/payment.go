@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
@@ -688,6 +689,8 @@ func (s *paymentService) syncPaymentStatusFromGateway(ctx context.Context, p *pa
 		}
 	} else if gatewayTrackingID != "" {
 		switch gateway {
+		case types.PaymentGatewayTypePaystack:
+			newStatus, backfillGatewayPaymentID, err = s.fetchPaystackPaymentStatus(ctx, gatewayTrackingID)
 		case types.PaymentGatewayTypeRazorpay:
 			newStatus, backfillGatewayPaymentID, err = s.fetchRazorpayPaymentLinkStatus(ctx, gatewayTrackingID)
 		default:
@@ -748,6 +751,29 @@ func (s *paymentService) syncPaymentStatusFromGateway(ctx context.Context, p *pa
 	}
 
 	return updatedPayment.ToPayment(), err
+}
+
+func (s *paymentService) fetchPaystackPaymentStatus(ctx context.Context, reference string) (types.PaymentStatus, string, error) {
+	integration, err := s.IntegrationFactory.GetPaystackIntegration(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	transaction, err := integration.Client.VerifyTransaction(ctx, reference)
+	if err != nil {
+		return "", "", err
+	}
+	gatewayPaymentID := reference
+	if transaction.ID != 0 {
+		gatewayPaymentID = fmt.Sprintf("%d", transaction.ID)
+	}
+	switch transaction.Status {
+	case "success":
+		return types.PaymentStatusSucceeded, gatewayPaymentID, nil
+	case "failed", "abandoned", "reversed":
+		return types.PaymentStatusFailed, gatewayPaymentID, nil
+	default:
+		return types.PaymentStatusPending, gatewayPaymentID, nil
+	}
 }
 
 func (s *paymentService) fetchStripePaymentStatus(ctx context.Context, gatewayPaymentID string) (types.PaymentStatus, error) {

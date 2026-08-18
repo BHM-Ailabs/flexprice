@@ -12,6 +12,7 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/wallet"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/integration/nomod"
+	"github.com/flexprice/flexprice/internal/integration/paystack"
 	"github.com/flexprice/flexprice/internal/integration/razorpay"
 	temporalmodels "github.com/flexprice/flexprice/internal/temporal/models"
 	temporalservice "github.com/flexprice/flexprice/internal/temporal/service"
@@ -247,6 +248,8 @@ func (p *paymentProcessor) handlePaymentLinkCreation(ctx context.Context, paymen
 	switch gatewayType {
 	case types.PaymentGatewayTypeStripe:
 		return p.handleStripePaymentLinkCreation(ctx, paymentObj, invoice)
+	case types.PaymentGatewayTypePaystack:
+		return p.handlePaystackPaymentLinkCreation(ctx, paymentObj, invoice)
 	case types.PaymentGatewayTypeRazorpay:
 		return p.handleRazorpayPaymentLinkCreation(ctx, paymentObj, invoice)
 	case types.PaymentGatewayTypeNomod:
@@ -260,6 +263,60 @@ func (p *paymentProcessor) handlePaymentLinkCreation(ctx context.Context, paymen
 			}).
 			Mark(ierr.ErrValidation)
 	}
+}
+
+func (p *paymentProcessor) handlePaystackPaymentLinkCreation(ctx context.Context, paymentObj *payment.Payment, invoice *invoice.Invoice) error {
+	successURL := ""
+	cancelURL := ""
+	if paymentObj.GatewayMetadata != nil {
+		successURL = paymentObj.GatewayMetadata["success_url"]
+		cancelURL = paymentObj.GatewayMetadata["cancel_url"]
+	}
+	if paymentObj.Metadata != nil {
+		if successURL == "" {
+			successURL = paymentObj.Metadata["success_url"]
+		}
+		if cancelURL == "" {
+			cancelURL = paymentObj.Metadata["cancel_url"]
+		}
+	}
+
+	linkMetadata := make(map[string]string)
+	for key, value := range paymentObj.Metadata {
+		if key != "connection_id" && key != "connection_name" {
+			linkMetadata[key] = value
+		}
+	}
+	linkMetadata["flexprice_payment_id"] = paymentObj.ID
+
+	integration, err := p.IntegrationFactory.GetPaystackIntegration(ctx)
+	if err != nil {
+		return ierr.WithError(err).WithHint("Failed to get Paystack integration").Mark(ierr.ErrSystem)
+	}
+	result, err := integration.PaymentSvc.CreatePaymentLink(ctx, &paystack.CreatePaymentLinkRequest{
+		InvoiceID: paymentObj.DestinationID, CustomerID: invoice.CustomerID,
+		Amount: paymentObj.Amount, Currency: paymentObj.Currency,
+		SuccessURL: successURL, CancelURL: cancelURL,
+		Metadata: linkMetadata, PaymentID: paymentObj.ID,
+	}, NewCustomerService(p.ServiceParams), NewInvoiceService(p.ServiceParams))
+	if err != nil {
+		p.Logger.Error(ctx, "failed to create Paystack payment link", "error", err, "payment_id", paymentObj.ID, "invoice_id", paymentObj.DestinationID)
+		return err
+	}
+
+	paymentObj.PaymentStatus = types.PaymentStatusPending
+	paymentObj.GatewayTrackingID = &result.Reference
+	if paymentObj.GatewayMetadata == nil {
+		paymentObj.GatewayMetadata = types.Metadata{}
+	}
+	paymentObj.GatewayMetadata["payment_url"] = result.PaymentURL
+	paymentObj.GatewayMetadata["gateway"] = string(types.PaymentGatewayTypePaystack)
+	paymentObj.GatewayMetadata["reference"] = result.Reference
+	if err := p.PaymentRepo.Update(ctx, paymentObj); err != nil {
+		return ierr.WithError(err).WithHint("Failed to update payment with Paystack checkout information").Mark(ierr.ErrDatabase)
+	}
+	p.Logger.Info(ctx, "Paystack payment link stored", "payment_id", paymentObj.ID, "paystack_reference", result.Reference)
+	return nil
 }
 
 func (p *paymentProcessor) handleStripePaymentLinkCreation(ctx context.Context, paymentObj *payment.Payment, invoice *invoice.Invoice) error {

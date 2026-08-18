@@ -12,6 +12,7 @@ func TestExtractProvider(t *testing.T) {
 		expected string
 	}{
 		{"/v1/webhooks/stripe/t_xxx/env_yyy", "stripe"},
+		{"/v1/webhooks/paystack/t_xxx/env_yyy", "paystack"},
 		{"/v1/webhooks/paddle/t_aaa/env_bbb", "paddle"},
 		{"/v1/webhooks/chargebee/t_ccc/env_ddd", "chargebee"},
 		{"/v1/webhooks/", "unknown"},

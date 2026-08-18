@@ -69,6 +69,7 @@ type CheckoutPaymentProvider string
 
 const (
 	CheckoutPaymentProviderRazorpay CheckoutPaymentProvider = "razorpay"
+	CheckoutPaymentProviderPaystack CheckoutPaymentProvider = "paystack"
 )
 
 func (p CheckoutPaymentProvider) String() string { return string(p) }
@@ -76,10 +77,11 @@ func (p CheckoutPaymentProvider) String() string { return string(p) }
 func (p CheckoutPaymentProvider) Validate() error {
 	allowed := []CheckoutPaymentProvider{
 		CheckoutPaymentProviderRazorpay,
+		CheckoutPaymentProviderPaystack,
 	}
 	if p != "" && !lo.Contains(allowed, p) {
 		return ierr.NewError("invalid checkout payment provider").
-			WithHint("Allowed values: razorpay").
+			WithHint("Allowed values: razorpay, paystack").
 			WithReportableDetails(map[string]any{"allowed_values": allowed}).
 			Mark(ierr.ErrValidation)
 	}
@@ -91,6 +93,8 @@ func (p CheckoutPaymentProvider) SessionExpiry() time.Duration {
 	switch p {
 	case CheckoutPaymentProviderRazorpay:
 		return 15 * time.Minute
+	case CheckoutPaymentProviderPaystack:
+		return 30 * time.Minute
 	default:
 		return 30 * time.Minute // Default to 30 minutes
 	}
@@ -127,14 +131,14 @@ type PaymentAction struct {
 
 type CheckoutSessionFilter struct {
 	*QueryFilter
-	CustomerIDs        []string                      `json:"customer_ids,omitempty"`
-	Actions            []CheckoutAction              `json:"actions,omitempty"`
-	PaymentProviders   []CheckoutPaymentProvider     `json:"payment_providers,omitempty"`
-	CheckoutStatuses   []CheckoutStatus              `json:"checkout_statuses,omitempty"`
-	ExpiresAtLT        *time.Time                    `json:"expires_at_lt,omitempty"`
-	CheckoutInvoiceIDs []string                      `json:"checkout_invoice_ids,omitempty"`
-	CheckoutPaymentIDs []string                      `json:"checkout_payment_ids,omitempty"`
-	Configuration      *CheckoutConfigurationFilter  `json:"configuration,omitempty"`
+	CustomerIDs        []string                     `json:"customer_ids,omitempty"`
+	Actions            []CheckoutAction             `json:"actions,omitempty"`
+	PaymentProviders   []CheckoutPaymentProvider    `json:"payment_providers,omitempty"`
+	CheckoutStatuses   []CheckoutStatus             `json:"checkout_statuses,omitempty"`
+	ExpiresAtLT        *time.Time                   `json:"expires_at_lt,omitempty"`
+	CheckoutInvoiceIDs []string                     `json:"checkout_invoice_ids,omitempty"`
+	CheckoutPaymentIDs []string                     `json:"checkout_payment_ids,omitempty"`
+	Configuration      *CheckoutConfigurationFilter `json:"configuration,omitempty"`
 }
 
 // CheckoutConfigurationFilter matches fields inside checkout_sessions.configuration

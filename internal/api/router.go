@@ -666,6 +666,8 @@ func NewRouter(
 	{
 		// Stripe webhook endpoint: POST /v1/webhooks/stripe/{tenant_id}/{environment_id}
 		webhooks.POST("/stripe/:tenant_id/:environment_id", handlers.Webhook.HandleStripeWebhook)
+		// Paystack webhook endpoint: POST /v1/webhooks/paystack/{tenant_id}/{environment_id}
+		webhooks.POST("/paystack/:tenant_id/:environment_id", handlers.Webhook.HandlePaystackWebhook)
 		// HubSpot webhook endpoint: POST /v1/webhooks/hubspot/{tenant_id}/{environment_id}
 		webhooks.POST("/hubspot/:tenant_id/:environment_id", handlers.Webhook.HandleHubSpotWebhook)
 		// Razorpay webhook endpoint: POST /v1/webhooks/razorpay/{tenant_id}/{environment_id}

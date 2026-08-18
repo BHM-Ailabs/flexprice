@@ -279,6 +279,16 @@ func convertConnectionMetadataToMap(encryptedSecretData types.ConnectionMetadata
 				"account_id":      encryptedSecretData.Stripe.AccountID,
 			}
 		}
+	case types.SecretProviderPaystack:
+		if encryptedSecretData.Paystack != nil {
+			result := map[string]interface{}{
+				"secret_key": encryptedSecretData.Paystack.SecretKey,
+			}
+			if encryptedSecretData.Paystack.PublicKey != "" {
+				result["public_key"] = encryptedSecretData.Paystack.PublicKey
+			}
+			return result
+		}
 	case types.SecretProviderS3:
 		if encryptedSecretData.S3 != nil {
 			result := map[string]interface{}{

@@ -18,6 +18,7 @@ import (
 	moyasarwebhook "github.com/flexprice/flexprice/internal/integration/moyasar/webhook"
 	nomodwebhook "github.com/flexprice/flexprice/internal/integration/nomod/webhook"
 	paddlewebhook "github.com/flexprice/flexprice/internal/integration/paddle/webhook"
+	"github.com/flexprice/flexprice/internal/integration/paystack"
 	quickbookswebhook "github.com/flexprice/flexprice/internal/integration/quickbooks/webhook"
 	razorpaywebhook "github.com/flexprice/flexprice/internal/integration/razorpay/webhook"
 	"github.com/flexprice/flexprice/internal/integration/stripe/webhook"
@@ -425,6 +426,67 @@ func (h *WebhookHandler) HandleHubSpotWebhook(c *gin.Context) {
 	h.logger.Info(context.Background(), "successfully processed HubSpot webhook",
 		"environment_id", environmentID,
 		"event_count", len(events))
+}
+
+func (h *WebhookHandler) HandlePaystackWebhook(c *gin.Context) {
+	tenantID := c.Param("tenant_id")
+	environmentID := c.Param("environment_id")
+	if tenantID == "" || environmentID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id and environment_id are required"})
+		return
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		h.logger.Error(c.Request.Context(), "failed to read Paystack webhook body", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	signature := c.GetHeader("x-paystack-signature")
+	if signature == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "x-paystack-signature is required"})
+		return
+	}
+
+	ctx := types.SetTenantID(c.Request.Context(), tenantID)
+	ctx = types.SetEnvironmentID(ctx, environmentID)
+	c.Request = c.Request.WithContext(ctx)
+
+	integration, err := h.integrationFactory.GetPaystackIntegration(ctx)
+	if err != nil {
+		h.logger.Error(ctx, "failed to get Paystack integration", "error", err, "tenant_id", tenantID, "environment_id", environmentID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Paystack integration unavailable"})
+		return
+	}
+	if err := integration.Client.VerifyWebhookSignature(ctx, body, signature); err != nil {
+		h.logger.Error(ctx, "Paystack webhook signature verification failed", "error", err, "tenant_id", tenantID, "environment_id", environmentID)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid webhook signature"})
+		return
+	}
+
+	var event paystack.WebhookEvent
+	if err := json.Unmarshal(body, &event); err != nil {
+		h.logger.Error(ctx, "failed to parse Paystack webhook", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid webhook payload"})
+		return
+	}
+
+	services := &interfaces.ServiceDependencies{
+		CustomerService:                 h.customerService,
+		PaymentService:                  h.paymentService,
+		InvoiceService:                  h.invoiceService,
+		PlanService:                     h.planService,
+		SubscriptionService:             h.subscriptionService,
+		EntityIntegrationMappingService: h.entityIntegrationMappingService,
+		CheckoutSessionService:          h.checkoutSessionService,
+		DB:                              h.db,
+	}
+	if err := integration.WebhookHandler.Handle(ctx, &event, services); err != nil {
+		h.logger.Error(ctx, "failed to process Paystack webhook", "error", err, "event_type", event.Event, "paystack_reference", event.Data.Reference)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "webhook processing failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Webhook processed successfully"})
 }
 
 func (h *WebhookHandler) HandleRazorpayWebhook(c *gin.Context) {

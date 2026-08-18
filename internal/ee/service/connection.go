@@ -71,6 +71,26 @@ func (s *connectionService) encryptMetadata(encryptedSecretData types.Connection
 			}
 		}
 
+	case types.SecretProviderPaystack:
+		if encryptedSecretData.Paystack != nil {
+			encryptedPublicKey := ""
+			var err error
+			if encryptedSecretData.Paystack.PublicKey != "" {
+				encryptedPublicKey, err = s.encryptionService.Encrypt(encryptedSecretData.Paystack.PublicKey)
+				if err != nil {
+					return types.ConnectionMetadata{}, err
+				}
+			}
+			encryptedSecretKey, err := s.encryptionService.Encrypt(encryptedSecretData.Paystack.SecretKey)
+			if err != nil {
+				return types.ConnectionMetadata{}, err
+			}
+			encryptedMetadata.Paystack = &types.PaystackConnectionMetadata{
+				PublicKey: encryptedPublicKey,
+				SecretKey: encryptedSecretKey,
+			}
+		}
+
 	case types.SecretProviderS3:
 		if encryptedSecretData.S3 != nil {
 			encryptedAccessKeyID, err := s.encryptionService.Encrypt(encryptedSecretData.S3.AWSAccessKeyID)
@@ -592,6 +612,17 @@ func (s *connectionService) CreateConnection(ctx context.Context, req dto.Create
 	conn.CreatedBy = types.GetUserID(ctx)
 	conn.UpdatedBy = types.GetUserID(ctx)
 
+	if conn.ProviderType == types.SecretProviderPaystack {
+		if conn.EncryptedSecretData.Paystack == nil {
+			return nil, ierr.NewError("paystack connection requires secret_key").
+				WithHint("encrypted_secret_data.paystack with secret_key is required").
+				Mark(ierr.ErrValidation)
+		}
+		if err := conn.EncryptedSecretData.Paystack.Validate(); err != nil {
+			return nil, err
+		}
+	}
+
 	// AWS Marketplace: verify the tenant's role_arn/external_id actually work before the
 	// connection is ever persisted. AssumeRole succeeding is the whole check — the credentials
 	// themselves are discarded immediately after, using a short verification-only session
@@ -784,6 +815,7 @@ func (s *connectionService) CreateConnection(ctx context.Context, req dto.Create
 		"provider_type", conn.ProviderType,
 		"has_quickbooks", conn.EncryptedSecretData.QuickBooks != nil,
 		"has_stripe", conn.EncryptedSecretData.Stripe != nil,
+		"has_paystack", conn.EncryptedSecretData.Paystack != nil,
 		"has_chargebee", conn.EncryptedSecretData.Chargebee != nil,
 		"has_s3", conn.EncryptedSecretData.S3 != nil)
 	encryptedMetadata, err := s.encryptMetadata(conn.EncryptedSecretData, conn.ProviderType)
@@ -922,6 +954,21 @@ func (s *connectionService) UpdateConnection(ctx context.Context, id string, req
 	if req.EncryptedSecretData == nil && len(req.FlatEncryptedSecretData) > 0 {
 		structured := dto.ConvertFlatMetadataToStructured(req.FlatEncryptedSecretData, conn.ProviderType)
 		req.EncryptedSecretData = &structured
+	}
+
+	if req.EncryptedSecretData != nil && req.EncryptedSecretData.Paystack != nil {
+		if conn.ProviderType != types.SecretProviderPaystack {
+			return nil, ierr.NewError("Paystack credential update is only valid for paystack connections").Mark(ierr.ErrValidation)
+		}
+		if err := req.EncryptedSecretData.Paystack.Validate(); err != nil {
+			return nil, err
+		}
+		encryptedMetadata, err := s.encryptMetadata(*req.EncryptedSecretData, conn.ProviderType)
+		if err != nil {
+			s.Logger.Error(ctx, "failed to encrypt Paystack credentials", "error", err, "connection_id", id)
+			return nil, err
+		}
+		conn.EncryptedSecretData.Paystack = encryptedMetadata.Paystack
 	}
 
 	// Zoho Books: merge webhook_secret only (plaintext from API → encrypted at rest)

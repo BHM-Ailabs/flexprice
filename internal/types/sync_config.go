@@ -198,6 +198,17 @@ func ProviderBaseSyncConfig(provider SecretProvider) *SyncConfig {
 			Deal:         off,
 			Quote:        off,
 		}
+	case SecretProviderPaystack:
+		return &SyncConfig{
+			Customer:     off,
+			Invoice:      off,
+			Payment:      off,
+			Plan:         off,
+			Subscription: off,
+			Price:        off,
+			Deal:         off,
+			Quote:        off,
+		}
 	case SecretProviderChargebee:
 		return &SyncConfig{
 			Customer:     &EntitySyncConfig{Inbound: false, Outbound: true},

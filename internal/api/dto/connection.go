@@ -75,6 +75,16 @@ func ConvertFlatMetadataToStructured(flatMetadata map[string]interface{}, provid
 			Stripe: stripeMetadata,
 		}
 
+	case types.SecretProviderPaystack:
+		paystackMetadata := &types.PaystackConnectionMetadata{}
+		if pk, ok := flatMetadata["public_key"].(string); ok {
+			paystackMetadata.PublicKey = pk
+		}
+		if sk, ok := flatMetadata["secret_key"].(string); ok {
+			paystackMetadata.SecretKey = sk
+		}
+		return types.ConnectionMetadata{Paystack: paystackMetadata}
+
 	case types.SecretProviderS3:
 		s3Metadata := &types.S3ConnectionMetadata{}
 
@@ -382,7 +392,7 @@ type UpdateConnectionRequest struct {
 }
 
 func updateRequestMetadataStructPopulated(cm types.ConnectionMetadata) bool {
-	return cm.Stripe != nil || cm.S3 != nil || cm.HubSpot != nil || cm.Razorpay != nil ||
+	return cm.Stripe != nil || cm.Paystack != nil || cm.S3 != nil || cm.HubSpot != nil || cm.Razorpay != nil ||
 		cm.Chargebee != nil || cm.QuickBooks != nil || cm.Nomod != nil || cm.Moyasar != nil ||
 		cm.Paddle != nil || cm.ZohoBooks != nil || cm.Whop != nil || cm.Tabs != nil || cm.AWSMarketplace != nil || cm.GCPMarketplace != nil || cm.Generic != nil || cm.Settings != nil
 }
