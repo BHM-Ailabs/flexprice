@@ -2073,6 +2073,7 @@ func (s *subscriptionService) SaveGatewayPaymentMethod(
 			WithHint("Provide the subscription and the gateway payment method to save").
 			Mark(ierr.ErrValidation)
 	}
+	saved := false
 
 	// Lock the row for the read-merge-write: a renewal or a concurrent capture must not have its
 	// own subscription changes clobbered by a stale in-memory copy.
@@ -2082,8 +2083,50 @@ func (s *subscriptionService) SaveGatewayPaymentMethod(
 			return err
 		}
 
-		changed := lo.FromPtr(sub.GatewayPaymentMethodID) != gatewayPaymentMethodID
+		metadataToMerge := make(map[string]string, len(metadata))
 		for key, value := range metadata {
+			metadataToMerge[key] = value
+		}
+
+		if paystack.IsAuthorizationCode(gatewayPaymentMethodID) {
+			if metadataToMerge[paystack.MetadataKeyCustomerEmail] == "" {
+				return ierr.NewError("Paystack customer email is required to save a reusable authorization").
+					Mark(ierr.ErrValidation)
+			}
+
+			incomingCapturedAt, err := time.Parse(time.RFC3339Nano, metadataToMerge[paystack.MetadataKeyCapturedAt])
+			if err != nil {
+				return ierr.WithError(err).
+					WithHint("Paystack authorization capture time is required").
+					Mark(ierr.ErrValidation)
+			}
+			if existingValue := sub.Metadata[paystack.MetadataKeyCapturedAt]; existingValue != "" {
+				if existingCapturedAt, parseErr := time.Parse(time.RFC3339Nano, existingValue); parseErr == nil &&
+					incomingCapturedAt.Before(existingCapturedAt) {
+					// A delayed older webhook must never replace the card captured more recently.
+					return nil
+				}
+			}
+
+			if lo.FromPtr(sub.GatewayPaymentMethodID) != gatewayPaymentMethodID {
+				// A new card replaces the complete bounded descriptor set. Explicit empties clear
+				// optional details from the previous card instead of leaving stale display data.
+				for _, key := range []string{
+					paystack.MetadataKeyCardLast4,
+					paystack.MetadataKeyCardType,
+					paystack.MetadataKeyCardBank,
+					paystack.MetadataKeyCardExpMonth,
+					paystack.MetadataKeyCardExpYear,
+				} {
+					if _, present := metadataToMerge[key]; !present {
+						metadataToMerge[key] = ""
+					}
+				}
+			}
+		}
+
+		changed := lo.FromPtr(sub.GatewayPaymentMethodID) != gatewayPaymentMethodID
+		for key, value := range metadataToMerge {
 			if sub.Metadata[key] != value {
 				changed = true
 				break
@@ -2094,23 +2137,29 @@ func (s *subscriptionService) SaveGatewayPaymentMethod(
 		}
 
 		sub.GatewayPaymentMethodID = lo.ToPtr(gatewayPaymentMethodID)
-		if len(metadata) > 0 && sub.Metadata == nil {
+		if len(metadataToMerge) > 0 && sub.Metadata == nil {
 			sub.Metadata = types.Metadata{}
 		}
-		for key, value := range metadata {
+		for key, value := range metadataToMerge {
 			sub.Metadata[key] = value
 		}
 
-		return s.SubRepo.Update(txCtx, sub)
+		if err := s.SubRepo.Update(txCtx, sub); err != nil {
+			return err
+		}
+		saved = true
+		return nil
 	}); err != nil {
 		return ierr.WithError(err).
 			WithHint("Failed to save the gateway payment method on the subscription").
 			Mark(ierr.ErrDatabase)
 	}
 
-	s.Logger.Info(ctx, "saved gateway payment method on subscription",
-		"subscription_id", subscriptionID,
-		"gateway_payment_method_id", paystack.MaskAuthorizationCode(gatewayPaymentMethodID))
+	if saved {
+		s.Logger.Info(ctx, "saved gateway payment method on subscription",
+			"subscription_id", subscriptionID,
+			"gateway_payment_method_id", paystack.MaskAuthorizationCode(gatewayPaymentMethodID))
+	}
 
 	return nil
 }

@@ -26,6 +26,7 @@ const (
 	MetadataKeyCardBank      = "paystack_card_bank"
 	MetadataKeyCardExpMonth  = "paystack_card_exp_month"
 	MetadataKeyCardExpYear   = "paystack_card_exp_year"
+	MetadataKeyCapturedAt    = "paystack_authorization_captured_at"
 )
 
 // IsAuthorizationCode reports whether a stored gateway payment method id is a Paystack

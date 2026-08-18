@@ -135,6 +135,17 @@ func (h *WebhookHandler) captureReusableAuthorization(
 	if services == nil || services.InvoiceService == nil || services.SubscriptionService == nil {
 		return nil
 	}
+	if transaction.Customer == nil || strings.TrimSpace(transaction.Customer.Email) == "" {
+		return ierr.NewError("verified Paystack customer email is required to save a reusable authorization").
+			WithHint("Retry after Paystack verification returns the authorization owner's email").
+			Mark(ierr.ErrValidation)
+	}
+	capturedAt, err := time.Parse(time.RFC3339, transaction.PaidAt)
+	if err != nil {
+		return ierr.WithError(err).
+			WithHint("Verified Paystack paid_at is required to order reusable authorizations").
+			Mark(ierr.ErrValidation)
+	}
 
 	invoiceResp, err := services.InvoiceService.GetInvoice(ctx, paymentResp.DestinationID)
 	if err != nil {
@@ -149,24 +160,16 @@ func (h *WebhookHandler) captureReusableAuthorization(
 		return nil
 	}
 
-	metadata := map[string]string{}
-	if transaction.Customer != nil && transaction.Customer.Email != "" {
-		metadata[MetadataKeyCustomerEmail] = transaction.Customer.Email
-	}
-	if authorization.Last4 != "" {
-		metadata[MetadataKeyCardLast4] = authorization.Last4
-	}
-	if authorization.CardType != "" {
-		metadata[MetadataKeyCardType] = authorization.CardType
-	}
-	if authorization.Bank != "" {
-		metadata[MetadataKeyCardBank] = authorization.Bank
-	}
-	if authorization.ExpMonth != "" {
-		metadata[MetadataKeyCardExpMonth] = authorization.ExpMonth
-	}
-	if authorization.ExpYear != "" {
-		metadata[MetadataKeyCardExpYear] = authorization.ExpYear
+	// Always replace the bounded descriptor set for an accepted authorization. Empty optional
+	// values intentionally clear details from a prior card rather than displaying stale data.
+	metadata := map[string]string{
+		MetadataKeyCustomerEmail: strings.TrimSpace(transaction.Customer.Email),
+		MetadataKeyCardLast4:     authorization.Last4,
+		MetadataKeyCardType:      authorization.CardType,
+		MetadataKeyCardBank:      authorization.Bank,
+		MetadataKeyCardExpMonth:  authorization.ExpMonth,
+		MetadataKeyCardExpYear:   authorization.ExpYear,
+		MetadataKeyCapturedAt:    capturedAt.UTC().Format(time.RFC3339Nano),
 	}
 
 	if err := services.SubscriptionService.SaveGatewayPaymentMethod(ctx, subscriptionID, authorization.AuthorizationCode, metadata); err != nil {

@@ -115,6 +115,8 @@ func (s *PaystackAutochargeSuite) TestSaveGatewayPaymentMethodPersistsUnderLock(
 	metadata := map[string]string{
 		paystack.MetadataKeyCustomerEmail: "payer@example.com",
 		paystack.MetadataKeyCardLast4:     "4081",
+		paystack.MetadataKeyCardBank:      "Old Bank",
+		paystack.MetadataKeyCapturedAt:    "2026-08-18T12:00:00Z",
 	}
 	s.NoError(s.subscription.SaveGatewayPaymentMethod(s.GetContext(), sub.ID, "AUTH_reusable123", metadata))
 
@@ -130,7 +132,48 @@ func (s *PaystackAutochargeSuite) TestSaveGatewayPaymentMethodPersistsUnderLock(
 	s.NoError(err)
 	s.Equal(stored.UpdatedAt, again.UpdatedAt)
 
+	// A newer sparse card replaces the complete descriptor set, clearing omitted old details.
+	newer := map[string]string{
+		paystack.MetadataKeyCustomerEmail: "new@example.com",
+		paystack.MetadataKeyCapturedAt:    "2026-08-18T14:00:00Z",
+	}
+	s.NoError(s.subscription.SaveGatewayPaymentMethod(s.GetContext(), sub.ID, "AUTH_newer", newer))
+
+	// A delayed, older verified webhook cannot put the old authorization back.
+	older := map[string]string{
+		paystack.MetadataKeyCustomerEmail: "old@example.com",
+		paystack.MetadataKeyCardLast4:     "1111",
+		paystack.MetadataKeyCardBank:      "Old Bank",
+		paystack.MetadataKeyCapturedAt:    "2026-08-18T13:00:00Z",
+	}
+	s.NoError(s.subscription.SaveGatewayPaymentMethod(s.GetContext(), sub.ID, "AUTH_older", older))
+
+	fresh, err := s.GetStores().SubscriptionRepo.Get(s.GetContext(), sub.ID)
+	s.NoError(err)
+	s.Equal("AUTH_newer", lo.FromPtr(fresh.GatewayPaymentMethodID))
+	s.Equal("new@example.com", fresh.Metadata[paystack.MetadataKeyCustomerEmail])
+	s.Empty(fresh.Metadata[paystack.MetadataKeyCardLast4])
+	s.Empty(fresh.Metadata[paystack.MetadataKeyCardBank])
+
 	s.Error(s.subscription.SaveGatewayPaymentMethod(s.GetContext(), "", "AUTH_reusable123", nil))
+}
+
+func TestKnownPaystackCollection(t *testing.T) {
+	p := &payment.Payment{
+		PaymentStatus:     types.PaymentStatusSucceeded,
+		PaymentGateway:    lo.ToPtr(string(types.PaymentGatewayTypePaystack)),
+		PaymentMethodID:   "AUTH_reusable123",
+		GatewayPaymentID:  lo.ToPtr("7788"),
+		GatewayTrackingID: lo.ToPtr("fp-pay-1"),
+	}
+	require.True(t, isKnownPaystackCollection(p))
+	require.Equal(t, "fp-pay-1", paystackCollectionReference(p))
+
+	p.GatewayPaymentID = nil
+	require.False(t, isKnownPaystackCollection(p), "a provider result is required")
+	p.GatewayPaymentID = lo.ToPtr("7788")
+	p.PaymentStatus = types.PaymentStatusProcessing
+	require.False(t, isKnownPaystackCollection(p), "an unresolved charge is not a proven collection")
 }
 
 // The money semantics of a card-charge error: collected counts as paid, unknown counts as nothing,

@@ -215,6 +215,9 @@ func (p *paymentProcessor) ProcessPayment(ctx context.Context, id string) (*paym
 
 	paymentObj.UpdatedAt = time.Now().UTC()
 	if err := p.PaymentRepo.Update(ctx, paymentObj); err != nil {
+		if isKnownPaystackCollection(paymentObj) {
+			return paymentObj, paystack.NewChargeCollectedError(paystackCollectionReference(paymentObj), err)
+		}
 		return paymentObj, err
 	}
 
@@ -222,7 +225,13 @@ func (p *paymentProcessor) ProcessPayment(ctx context.Context, id string) (*paym
 	if paymentObj.PaymentStatus == types.PaymentStatusSucceeded {
 		if err := p.handlePostProcessing(ctx, paymentObj); err != nil {
 			p.Logger.Error(ctx, "failed to handle post-processing", "error", err, "payment_id", paymentObj.ID)
-			// Note: We don't return this error as the payment itself was successful
+			if isKnownPaystackCollection(paymentObj) {
+				// Paystack has the money and the payment row is succeeded; surface a typed
+				// collected outcome so no wallet fallback runs. The idempotent Paystack webhook
+				// retries invoice reconciliation even when the payment already succeeded.
+				return paymentObj, paystack.NewChargeCollectedError(paystackCollectionReference(paymentObj), err)
+			}
+			// Preserve existing Stripe/other-gateway behavior.
 		}
 	}
 
@@ -1012,7 +1021,7 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 		p.Logger.Info(ctx, "using default payment method for card payment",
 			"customer_id", customerID,
 			"payment_id", paymentObj.ID,
-			"payment_method_id", paymentObj.PaymentMethodID,
+			"payment_method_id", paystack.MaskAuthorizationCode(paymentObj.PaymentMethodID),
 			"card_last4", func() string {
 				if defaultPaymentMethod.Card != nil {
 					return defaultPaymentMethod.Card.Last4
@@ -1063,7 +1072,7 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 	p.Logger.Info(ctx, "successfully processed card payment",
 		"payment_id", paymentObj.ID,
 		"customer_id", customerID,
-		"payment_method_id", paymentObj.PaymentMethodID,
+		"payment_method_id", paystack.MaskAuthorizationCode(paymentObj.PaymentMethodID),
 		"payment_intent_id", paymentIntentResp.ID,
 		"amount", paymentObj.Amount.String(),
 	)
@@ -1078,6 +1087,22 @@ func isPaystackCardPayment(paymentObj *payment.Payment) bool {
 		return true
 	}
 	return paystack.IsAuthorizationCode(paymentObj.PaymentMethodID)
+}
+
+// isKnownPaystackCollection is true only after Paystack proved success and the in-flight payment
+// carries the provider result. Persistence/post-processing failures from this point are collected
+// outcomes, never declines.
+func isKnownPaystackCollection(paymentObj *payment.Payment) bool {
+	return isPaystackCardPayment(paymentObj) &&
+		paymentObj.PaymentStatus == types.PaymentStatusSucceeded &&
+		lo.FromPtr(paymentObj.GatewayPaymentID) != ""
+}
+
+func paystackCollectionReference(paymentObj *payment.Payment) string {
+	if reference := lo.FromPtr(paymentObj.GatewayTrackingID); reference != "" {
+		return reference
+	}
+	return lo.FromPtr(paymentObj.GatewayPaymentID)
 }
 
 // handlePaystackCardPayment charges a saved Paystack card authorization off-session. On success the
@@ -1131,26 +1156,11 @@ func (p *paymentProcessor) handlePaystackCardPayment(ctx context.Context, paymen
 		return err
 	}
 
-	updateReq := &dto.UpdatePaymentRequest{
-		PaymentStatus:    lo.ToPtr(string(types.PaymentStatusSucceeded)),
-		GatewayPaymentID: lo.ToPtr(result.GatewayPaymentID),
-		PaymentGateway:   lo.ToPtr(string(types.PaymentGatewayTypePaystack)),
-		PaymentMethodID:  lo.ToPtr(paymentObj.PaymentMethodID),
-		SucceededAt:      lo.ToPtr(time.Now().UTC()),
-	}
-
-	paymentService := NewPaymentService(p.ServiceParams)
-	if _, err := paymentService.UpdatePayment(ctx, paymentObj.ID, *updateReq); err != nil {
-		// Money was definitely collected and only our bookkeeping failed. Report it as collected
-		// so the caller neither retries nor falls back, and let the webhook persist the truth.
-		p.Logger.Error(ctx, "Paystack charge collected but the payment could not be marked succeeded",
-			"error", err,
-			"payment_id", paymentObj.ID,
-			"paystack_reference", result.Reference,
-			"gateway_payment_id", result.GatewayPaymentID,
-		)
-		return paystack.NewChargeCollectedError(result.Reference, err)
-	}
+	// Record the provider result on the in-flight payment. ProcessPayment owns the single
+	// persistence below; writing here as well would let its stale copy clear these gateway ids.
+	paymentObj.GatewayPaymentID = lo.ToPtr(result.GatewayPaymentID)
+	paymentObj.GatewayTrackingID = lo.ToPtr(result.Reference)
+	paymentObj.PaymentGateway = lo.ToPtr(string(types.PaymentGatewayTypePaystack))
 
 	p.Logger.Info(ctx, "successfully processed Paystack saved card payment",
 		"payment_id", paymentObj.ID,

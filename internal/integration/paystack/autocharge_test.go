@@ -124,6 +124,7 @@ func webhookFixtures(authorization *TransactionAuthorization) (*WebhookHandler, 
 		Status:        transactionStatusSuccess,
 		Reference:     "fp-pay-test",
 		Amount:        types.ToSmallestUnit(decimal.NewFromInt(50), "NGN"),
+		PaidAt:        "2026-08-18T12:30:00Z",
 		Currency:      "NGN",
 		Metadata:      map[string]any{"flexprice_payment_id": testPaymentID},
 		Authorization: authorization,
@@ -187,6 +188,7 @@ func TestWebhookStoresReusableAuthorization(t *testing.T) {
 		MetadataKeyCardBank:      "Test Bank",
 		MetadataKeyCardExpMonth:  "12",
 		MetadataKeyCardExpYear:   "2030",
+		MetadataKeyCapturedAt:    "2026-08-18T12:30:00Z",
 	}, saved.metadata)
 }
 
@@ -378,6 +380,21 @@ func TestWebhookPropagatesCapturePersistenceFailure(t *testing.T) {
 	require.Empty(t, subscriptionSvc.saved)
 	require.Empty(t, services.CheckoutSessionService.(*fakeCheckoutSessionService).completed,
 		"the payment must not be settled on an attempt that lost the saved card")
+}
+
+func TestWebhookRequiresVerifiedCustomerEmailForReusableAuthorization(t *testing.T) {
+	handler, subscriptionSvc, services, event := webhookFixtures(&TransactionAuthorization{
+		AuthorizationCode: testAuthCode,
+		Reusable:          true,
+		Last4:             "4081",
+	})
+	handler.client.(*fakeClient).verified.Customer.Email = ""
+
+	err := handler.Handle(context.Background(), event, services)
+
+	require.Error(t, err)
+	require.Empty(t, subscriptionSvc.saved)
+	require.Empty(t, services.CheckoutSessionService.(*fakeCheckoutSessionService).completed)
 }
 
 func chargeParams() *ChargeAuthorizationParams {

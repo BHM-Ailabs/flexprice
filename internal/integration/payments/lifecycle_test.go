@@ -17,7 +17,7 @@ import (
 type PaymentLifecycleSuite struct {
 	testutil.BaseServiceTestSuite
 	lifecycle *payments.PaymentLifecycle
-	testData struct {
+	testData  struct {
 		customer *customer.Customer
 		invoice  *invoice.Invoice
 	}
@@ -456,4 +456,42 @@ func (s *PaymentLifecycleSuite) TestFullLifecycle_Invoice() {
 	payment, err = s.GetStores().PaymentRepo.Get(ctx, id)
 	s.NoError(err)
 	s.Equal(types.PaymentStatusSucceeded, payment.PaymentStatus)
+}
+
+// A webhook retry must heal the invoice even when the payment row already reached SUCCEEDED
+// before an earlier reconciliation failure.
+func (s *PaymentLifecycleSuite) TestRecordPaymentSuccess_AlreadySucceededHealsInvoice() {
+	ctx := s.GetContext()
+	id, err := s.lifecycle.InitiatePayment(ctx, s.invoiceParams())
+	s.NoError(err)
+	s.NoError(s.lifecycle.ConfirmGatewayPayment(ctx, id, "gw_inv_heal"))
+
+	params := payments.RecordPaymentSuccessParams{
+		FlexpricePaymentID: id,
+		GatewayPaymentID:   "gw_inv_heal",
+		SucceededAt:        time.Now().UTC(),
+	}
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+
+	// Model a failed/lost post-processing write after the payment itself was persisted.
+	inv, err := s.GetStores().InvoiceRepo.Get(ctx, s.testData.invoice.ID)
+	s.NoError(err)
+	inv.PaymentStatus = types.PaymentStatusPending
+	inv.AmountPaid = decimal.Zero
+	inv.AmountRemaining = inv.AmountDue
+	inv.PaidAt = nil
+	s.NoError(s.GetStores().InvoiceRepo.Update(ctx, inv))
+
+	payment, err := s.GetStores().PaymentRepo.Get(ctx, id)
+	s.NoError(err)
+	s.Equal(types.PaymentStatusSucceeded, payment.PaymentStatus)
+
+	// The idempotent webhook delivery skips the payment transition but repeats reconciliation.
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+
+	healed, err := s.GetStores().InvoiceRepo.Get(ctx, s.testData.invoice.ID)
+	s.NoError(err)
+	s.Equal(types.PaymentStatusSucceeded, healed.PaymentStatus)
+	s.True(healed.AmountRemaining.IsZero())
+	s.True(healed.AmountPaid.Equal(decimal.NewFromInt(100)))
 }

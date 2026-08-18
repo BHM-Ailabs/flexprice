@@ -158,7 +158,8 @@ func (l *PaymentLifecycle) ConfirmGatewayPayment(ctx context.Context, flexpriceP
 // RecordPaymentSuccess transitions the payment to SUCCEEDED and, for INVOICE
 // destination payments, reconciles the invoice. Called from the webhook handler.
 //
-// Idempotent: if the payment is already SUCCEEDED, logs and returns nil.
+// Idempotent: if the payment is already SUCCEEDED, skips the state transition but still
+// reconciles an invoice destination so a retry heals an earlier post-processing failure.
 func (l *PaymentLifecycle) RecordPaymentSuccess(ctx context.Context, params RecordPaymentSuccessParams) error {
 	l.logger.Info(ctx, "recording payment success",
 		"flexprice_payment_id", params.FlexpricePaymentID,
@@ -184,14 +185,13 @@ func (l *PaymentLifecycle) RecordPaymentSuccess(ctx context.Context, params Reco
 			Mark(ierr.ErrSystem)
 	}
 
-	if existing.PaymentStatus == types.PaymentStatusSucceeded {
-		l.logger.Info(ctx, "payment already succeeded, skipping",
+	alreadySucceeded := existing.PaymentStatus == types.PaymentStatusSucceeded
+	if alreadySucceeded {
+		l.logger.Info(ctx, "payment already succeeded, retrying destination reconciliation",
 			"flexprice_payment_id", params.FlexpricePaymentID,
 			"gateway_payment_id", params.GatewayPaymentID,
 		)
-		return nil
-	}
-	if existing.PaymentStatus.IsTerminal() {
+	} else if existing.PaymentStatus.IsTerminal() {
 		return ierr.NewError("payment is in a terminal state").
 			WithHint("Cannot transition to succeeded from current state").
 			WithReportableDetails(map[string]any{
@@ -202,39 +202,41 @@ func (l *PaymentLifecycle) RecordPaymentSuccess(ctx context.Context, params Reco
 			Mark(ierr.ErrValidation)
 	}
 
-	succeededAt := params.SucceededAt
-	if succeededAt.IsZero() {
-		succeededAt = time.Now().UTC()
-	}
+	if !alreadySucceeded {
+		succeededAt := params.SucceededAt
+		if succeededAt.IsZero() {
+			succeededAt = time.Now().UTC()
+		}
 
-	updateReq := apidto.UpdatePaymentRequest{
-		PaymentStatus:    lo.ToPtr(string(types.PaymentStatusSucceeded)),
-		GatewayPaymentID: lo.ToPtr(params.GatewayPaymentID),
-		SucceededAt:      lo.ToPtr(succeededAt),
-	}
+		updateReq := apidto.UpdatePaymentRequest{
+			PaymentStatus:    lo.ToPtr(string(types.PaymentStatusSucceeded)),
+			GatewayPaymentID: lo.ToPtr(params.GatewayPaymentID),
+			SucceededAt:      lo.ToPtr(succeededAt),
+		}
 
-	_, err = l.paymentService.UpdatePayment(ctx, params.FlexpricePaymentID, updateReq)
-	if err != nil {
-		l.logger.Error(ctx, "failed to update payment to succeeded",
+		_, err = l.paymentService.UpdatePayment(ctx, params.FlexpricePaymentID, updateReq)
+		if err != nil {
+			l.logger.Error(ctx, "failed to update payment to succeeded",
+				"flexprice_payment_id", params.FlexpricePaymentID,
+				"gateway_payment_id", params.GatewayPaymentID,
+				"error", err,
+			)
+			return ierr.WithError(err).
+				WithHint("Failed to record payment success").
+				WithReportableDetails(map[string]any{
+					"flexprice_payment_id": params.FlexpricePaymentID,
+					"gateway_payment_id":   params.GatewayPaymentID,
+				}).
+				Mark(ierr.ErrSystem)
+		}
+
+		l.logger.Info(ctx, "payment marked as succeeded",
 			"flexprice_payment_id", params.FlexpricePaymentID,
 			"gateway_payment_id", params.GatewayPaymentID,
-			"error", err,
+			"destination_type", existing.DestinationType,
+			"destination_id", existing.DestinationID,
 		)
-		return ierr.WithError(err).
-			WithHint("Failed to record payment success").
-			WithReportableDetails(map[string]any{
-				"flexprice_payment_id": params.FlexpricePaymentID,
-				"gateway_payment_id":   params.GatewayPaymentID,
-			}).
-			Mark(ierr.ErrSystem)
 	}
-
-	l.logger.Info(ctx, "payment marked as succeeded",
-		"flexprice_payment_id", params.FlexpricePaymentID,
-		"gateway_payment_id", params.GatewayPaymentID,
-		"destination_type", existing.DestinationType,
-		"destination_id", existing.DestinationID,
-	)
 
 	// For INVOICE destination, reconcile invoice payment status.
 	if existing.DestinationType == types.PaymentDestinationTypeInvoice {
