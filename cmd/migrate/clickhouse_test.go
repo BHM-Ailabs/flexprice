@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,5 +109,28 @@ func TestCloseClickHouseConnTimesOut(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
 		t.Fatalf("closeClickHouseConn() exceeded its timeout: %s", elapsed)
+	}
+}
+
+func TestClickHouseIndexMigrationsAreIdempotent(t *testing.T) {
+	files, err := filepath.Glob("../../migrations/clickhouse/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no ClickHouse migration files found")
+	}
+
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for lineNumber, line := range strings.Split(string(raw), "\n") {
+			upper := strings.ToUpper(strings.TrimSpace(line))
+			if strings.HasPrefix(upper, "ADD INDEX ") && !strings.HasPrefix(upper, "ADD INDEX IF NOT EXISTS ") {
+				t.Errorf("%s:%d must use ADD INDEX IF NOT EXISTS", filepath.Base(file), lineNumber+1)
+			}
+		}
 	}
 }
