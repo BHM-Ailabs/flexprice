@@ -83,19 +83,25 @@ func runClickHouseMigrations(ctx context.Context, cfg *config.Configuration, dir
 	if err != nil {
 		return fmt.Errorf("open clickhouse: %w", err)
 	}
-	defer conn.Close()
 
 	if err := conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", db)); err != nil {
+		closeClickHouseConn(conn, time.Second)
 		return fmt.Errorf("create database %q: %w", db, err)
 	}
-	conn.Close()
+	if !closeClickHouseConn(conn, time.Second) {
+		log.Warn(ctx, "timed out closing ClickHouse bootstrap connection")
+	}
 
 	// Reconnect scoped to the target database so unqualified names resolve.
 	dbConn, err := clickhouse_go.Open(opts)
 	if err != nil {
 		return fmt.Errorf("open clickhouse (db=%s): %w", db, err)
 	}
-	defer dbConn.Close()
+	defer func() {
+		if !closeClickHouseConn(dbConn, time.Second) {
+			log.Warn(ctx, "timed out closing ClickHouse migration connection")
+		}
+	}()
 
 	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
 	if err != nil {
@@ -123,6 +129,26 @@ func runClickHouseMigrations(ctx context.Context, cfg *config.Configuration, dir
 		log.Info(ctx, "applied clickhouse migration", "file", filepath.Base(f))
 	}
 	return nil
+}
+
+// closeClickHouseConn bounds driver shutdown so a successful one-shot
+// migration cannot prevent the service entrypoint from starting. The native
+// driver can wait indefinitely while draining an unhealthy connection pool;
+// the migration process exits immediately afterward, so the OS will reclaim
+// any socket that did not close within this best-effort window.
+func closeClickHouseConn(conn driver.Conn, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		_ = conn.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // execWithRetry runs a statement, retrying on ClickHouse Cloud's transient
@@ -160,7 +186,7 @@ func execWithRetry(ctx context.Context, conn driver.Conn, stmt string) error {
 // specially when they appear inside a quoted string literal. The current CH
 // migration set contains none, so this is safe today. To keep that assumption
 // honest for future authors, splitSQL fails loudly (returns an error) if it
-// detects any of those sequences inside a `'`- or `` ` ``-quoted literal rather
+// detects any of those sequences inside a single- or backtick-quoted literal rather
 // than silently mis-splitting or truncating a statement.
 func splitSQL(sql string) ([]string, error) {
 	if err := checkNoMarkersInLiterals(sql); err != nil {
@@ -202,8 +228,8 @@ func splitSQL(sql string) ([]string, error) {
 
 // checkNoMarkersInLiterals scans for `;`, `--`, and `/* */` occurring inside a
 // single-quoted or backtick-quoted literal, returning an error if found. This
-// guards the non-literal-aware splitSQL against silent mis-splitting. `''` and
-// backslash escapes inside single quotes are handled so escaped quotes don't
+// guards the non-literal-aware splitSQL against silent mis-splitting. Doubled
+// single quotes and backslash escapes are handled so escaped quotes don't
 // prematurely close a literal.
 func checkNoMarkersInLiterals(sql string) error {
 	for i := 0; i < len(sql); i++ {
