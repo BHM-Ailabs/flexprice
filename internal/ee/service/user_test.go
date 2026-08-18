@@ -920,11 +920,12 @@ func (s *RBACPermissionSuite) TestValidateRoles() {
 		{name: "user_may_hold_writer", userType: types.UserTypeUser, roles: []string{types.RoleAllWriter.String()}},
 		{name: "user_may_hold_reader_and_writer", userType: types.UserTypeUser, roles: []string{types.RoleAllReader.String(), types.RoleAllWriter.String()}},
 
-		// A service account holds full access or a narrow machine scope.
+		// A service account may hold non-administrative write access or a narrow machine scope.
 		{name: "service_account_may_hold_super_admin", userType: types.UserTypeServiceAccount, roles: []string{types.RoleSuperAdmin.String()}},
+		{name: "service_account_may_hold_writer", userType: types.UserTypeServiceAccount, roles: []string{types.RoleAllWriter.String()}},
 		{name: "service_account_may_hold_event_scopes", userType: types.UserTypeServiceAccount, roles: []string{types.RoleEventIngestor.String(), types.RoleEventReader.String()}},
 
-		// The two sets are disjoint apart from super_admin.
+		// Event scopes remain service-only, and read-only tenant access remains person-only.
 		{
 			name:        "user_may_not_hold_event_ingestor",
 			userType:    types.UserTypeUser,
@@ -947,16 +948,9 @@ func (s *RBACPermissionSuite) TestValidateRoles() {
 			errContains: "not assignable to this user type",
 		},
 		{
-			name:        "service_account_may_not_hold_writer",
-			userType:    types.UserTypeServiceAccount,
-			roles:       []string{types.RoleAllWriter.String()},
-			wantErr:     true,
-			errContains: "not assignable to this user type",
-		},
-		{
 			name:        "one_disallowed_role_rejects_the_whole_set",
 			userType:    types.UserTypeServiceAccount,
-			roles:       []string{types.RoleEventReader.String(), types.RoleAllWriter.String()},
+			roles:       []string{types.RoleEventReader.String(), types.RoleAllReader.String()},
 			wantErr:     true,
 			errContains: "not assignable to this user type",
 		},

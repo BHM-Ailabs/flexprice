@@ -12,16 +12,16 @@ const (
 	RoleEventReader   Role = "event_reader"
 )
 
-// AllowedRoles returns the roles assignable to this user type. People hold a
-// broad access level over the whole tenant, while service accounts hold either
-// full access or a single narrow machine scope, so the two sets are disjoint
-// apart from super_admin.
+// AllowedRoles returns the roles assignable to this user type. People can hold
+// read or write access over the tenant, while service accounts can hold
+// non-administrative write access or a narrow machine scope. Read-only tenant
+// access remains limited to people.
 func (ut UserType) AllowedRoles() []Role {
 	switch ut {
 	case UserTypeUser:
 		return []Role{RoleSuperAdmin, RoleAllReader, RoleAllWriter}
 	case UserTypeServiceAccount:
-		return []Role{RoleSuperAdmin, RoleEventIngestor, RoleEventReader}
+		return []Role{RoleSuperAdmin, RoleAllWriter, RoleEventIngestor, RoleEventReader}
 	default:
 		return nil
 	}
