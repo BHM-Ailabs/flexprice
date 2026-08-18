@@ -62,6 +62,30 @@ func (s *EnvironmentServiceSuite) TestCreateEnvironment() {
 	s.NotNil(resp)
 	s.Equal(req.Name, resp.Name)
 }
+
+func (s *EnvironmentServiceSuite) TestCreateProductionEnvironmentWithinDefaultLimit() {
+	req := dto.CreateEnvironmentRequest{
+		Name: "Production",
+		Type: string(types.EnvironmentProduction),
+	}
+
+	resp, err := s.environmentService.CreateEnvironment(s.ctx, req)
+	s.NoError(err)
+	s.NotNil(resp)
+	s.Equal(req.Name, resp.Name)
+	s.Equal(string(types.EnvironmentProduction), resp.Type)
+
+	_, err = s.environmentService.CreateEnvironment(s.ctx, dto.CreateEnvironmentRequest{
+		Name: "Production 2",
+		Type: string(types.EnvironmentProduction),
+	})
+	s.Error(err)
+
+	count, countErr := s.environmentRepo.CountByType(s.ctx, types.EnvironmentProduction)
+	s.NoError(countErr)
+	s.Equal(1, count)
+}
+
 func (s *EnvironmentServiceSuite) TestGetEnvironmentByID() {
 	env := &environment.Environment{
 		ID:   "env-1",
