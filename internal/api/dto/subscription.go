@@ -2,6 +2,7 @@ package dto
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -816,6 +817,27 @@ type SubscriptionResponse struct {
 	CheckoutSession *CheckoutSessionResponse `json:"checkout_session,omitempty"`
 }
 
+// MarshalJSON redacts the subscription's gateway payment method when it is a Paystack
+// authorization code: that code can charge the customer's card, so it never leaves the API.
+// The domain field is untouched — only this response copy is masked.
+func (r SubscriptionResponse) MarshalJSON() ([]byte, error) {
+	type alias SubscriptionResponse
+	clone := alias(r)
+	clone.Subscription = redactSubscriptionGatewayPaymentMethod(r.Subscription)
+	return json.Marshal(clone)
+}
+
+// redactSubscriptionGatewayPaymentMethod returns a shallow copy with a response-safe gateway
+// payment method id, leaving the caller's subscription untouched.
+func redactSubscriptionGatewayPaymentMethod(sub *subscription.Subscription) *subscription.Subscription {
+	if sub == nil || sub.GatewayPaymentMethodID == nil {
+		return sub
+	}
+	masked := *sub
+	masked.GatewayPaymentMethodID = types.RedactGatewayPaymentMethodID(sub.GatewayPaymentMethodID)
+	return &masked
+}
+
 // ListSubscriptionsResponse represents the response for listing subscriptions
 type ListSubscriptionsResponse = types.ListResponse[*SubscriptionResponse] // @name ListSubscriptionsResponse
 
@@ -850,6 +872,15 @@ type SubscriptionResponseV2 struct {
 	// is behind the plan's current max prices.sequence — i.e. plan-price
 	// changes have not yet been reconciled into this subscription's line items.
 	PlanPricesOutOfSync bool `json:"plan_prices_out_of_sync"`
+}
+
+// MarshalJSON redacts the subscription's gateway payment method for the same reason as
+// SubscriptionResponse.MarshalJSON.
+func (r SubscriptionResponseV2) MarshalJSON() ([]byte, error) {
+	type alias SubscriptionResponseV2
+	clone := alias(r)
+	clone.Subscription = redactSubscriptionGatewayPaymentMethod(r.Subscription)
+	return json.Marshal(clone)
 }
 
 func (r *CreateSubscriptionRequest) validateCheckoutCompatibility() error {

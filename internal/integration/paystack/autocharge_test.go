@@ -5,6 +5,7 @@ package paystack
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
@@ -24,12 +25,18 @@ import (
 type fakeClient struct {
 	Client
 	verified    *TransactionData
+	verifyErr   error
+	verifyCalls int
 	charged     []ChargeAuthorizationRequest
 	chargeReply *TransactionData
 	chargeErr   error
 }
 
 func (c *fakeClient) VerifyTransaction(_ context.Context, _ string) (*TransactionData, error) {
+	c.verifyCalls++
+	if c.verifyErr != nil {
+		return nil, c.verifyErr
+	}
 	return c.verified, nil
 }
 
@@ -70,10 +77,14 @@ type savedPaymentMethod struct {
 
 type fakeSubscriptionService struct {
 	interfaces.SubscriptionService
-	saved []savedPaymentMethod
+	saved   []savedPaymentMethod
+	saveErr error
 }
 
 func (s *fakeSubscriptionService) SaveGatewayPaymentMethod(_ context.Context, subscriptionID, gatewayPaymentMethodID string, metadata map[string]string) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	s.saved = append(s.saved, savedPaymentMethod{subscriptionID, gatewayPaymentMethodID, metadata})
 	return nil
 }
@@ -259,16 +270,20 @@ func TestChargeSavedAuthorizationRejectsDeclineAndMissingCard(t *testing.T) {
 		Email:             "payer@example.com",
 	}
 
-	declining := &fakeClient{chargeReply: &TransactionData{
+	// A declined charge is only terminal once verification confirms a terminal status.
+	declined := &TransactionData{
 		Status:    "failed",
 		Reference: "fp-pay-test",
 		Amount:    types.ToSmallestUnit(decimal.NewFromInt(50), "NGN"),
 		Currency:  "NGN",
-	}}
+	}
+	declining := &fakeClient{chargeReply: declined, verified: declined}
 	_, err := NewPaymentService(declining, logger.NewNoopLogger()).
 		ChargeSavedAuthorization(context.Background(), params, nil, paidInvoice)
 	require.Error(t, err)
+	require.False(t, IsChargeOutcomeUnknown(err), "a verified decline is a definite failure")
 	require.Len(t, declining.charged, 1)
+	require.Equal(t, 1, declining.verifyCalls)
 
 	noCard := &fakeClient{}
 	withoutAuthorization := *params
@@ -277,4 +292,113 @@ func TestChargeSavedAuthorizationRejectsDeclineAndMissingCard(t *testing.T) {
 		ChargeSavedAuthorization(context.Background(), &withoutAuthorization, nil, paidInvoice)
 	require.Error(t, err)
 	require.Empty(t, noCard.charged)
+}
+
+// A transport failure on the charge call is never a decline: verify by reference first.
+func TestChargeSavedAuthorizationVerifiesAfterTransportError(t *testing.T) {
+	client := &fakeClient{
+		chargeErr: errors.New("post https://api.paystack.co/transaction/charge_authorization: context deadline exceeded"),
+		verified: &TransactionData{
+			ID:        7788,
+			Status:    transactionStatusSuccess,
+			Reference: "fp-pay-test",
+			Amount:    types.ToSmallestUnit(decimal.NewFromInt(50), "NGN"),
+			Currency:  "NGN",
+		},
+	}
+
+	result, err := NewPaymentService(client, logger.NewNoopLogger()).
+		ChargeSavedAuthorization(context.Background(), chargeParams(), nil, pendingInvoiceService())
+
+	require.NoError(t, err)
+	require.Equal(t, "7788", result.GatewayPaymentID)
+	require.Equal(t, 1, client.verifyCalls)
+}
+
+// Charge failed AND verification cannot say what happened: the outcome must be reported as
+// unknown so no fallback or retry is attempted.
+func TestChargeSavedAuthorizationReportsUnknownOutcome(t *testing.T) {
+	tests := []struct {
+		name   string
+		client *fakeClient
+	}{
+		{
+			name: "verification unavailable after transport error",
+			client: &fakeClient{
+				chargeErr: errors.New("context deadline exceeded"),
+				verifyErr: errors.New("paystack unavailable"),
+			},
+		},
+		{
+			name: "charge still pending",
+			client: &fakeClient{
+				chargeReply: &TransactionData{Status: "pending", Reference: "fp-pay-test"},
+				verified:    &TransactionData{Status: "ongoing", Reference: "fp-pay-test"},
+			},
+		},
+		{
+			name: "verified success for a different amount",
+			client: &fakeClient{
+				chargeErr: errors.New("context deadline exceeded"),
+				verified: &TransactionData{
+					Status:    transactionStatusSuccess,
+					Reference: "fp-pay-test",
+					Amount:    types.ToSmallestUnit(decimal.NewFromInt(70), "NGN"),
+					Currency:  "NGN",
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewPaymentService(test.client, logger.NewNoopLogger()).
+				ChargeSavedAuthorization(context.Background(), chargeParams(), nil, pendingInvoiceService())
+
+			require.Error(t, err)
+			require.True(t, IsChargeOutcomeUnknown(err))
+			require.False(t, IsChargeCollected(err))
+		})
+	}
+}
+
+// Losing a captured authorization silently would leave renewals uncollectable, so a failed
+// persistence must surface as an error and let Paystack retry the idempotent webhook.
+func TestWebhookPropagatesCapturePersistenceFailure(t *testing.T) {
+	handler, subscriptionSvc, services, event := webhookFixtures(&TransactionAuthorization{
+		AuthorizationCode: testAuthCode,
+		Reusable:          true,
+		Last4:             "4081",
+	})
+	subscriptionSvc.saveErr = errors.New("subscription row locked")
+
+	err := handler.Handle(context.Background(), event, services)
+
+	require.Error(t, err)
+	require.Empty(t, subscriptionSvc.saved)
+	require.Empty(t, services.CheckoutSessionService.(*fakeCheckoutSessionService).completed,
+		"the payment must not be settled on an attempt that lost the saved card")
+}
+
+func chargeParams() *ChargeAuthorizationParams {
+	return &ChargeAuthorizationParams{
+		InvoiceID:         testInvoiceID,
+		CustomerID:        testCustomerID,
+		PaymentID:         testPaymentID,
+		Amount:            decimal.NewFromInt(50),
+		Currency:          "NGN",
+		AuthorizationCode: testAuthCode,
+		Email:             "payer@example.com",
+	}
+}
+
+func pendingInvoiceService() *fakeInvoiceService {
+	return &fakeInvoiceService{invoice: &dto.InvoiceResponse{Invoice: invoice.Invoice{
+		ID:              testInvoiceID,
+		CustomerID:      testCustomerID,
+		Currency:        "NGN",
+		PaymentStatus:   types.PaymentStatusPending,
+		InvoiceStatus:   types.InvoiceStatusFinalized,
+		AmountRemaining: decimal.NewFromInt(50),
+	}}}
 }

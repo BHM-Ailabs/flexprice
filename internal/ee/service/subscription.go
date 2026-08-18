@@ -21,6 +21,7 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/subscription"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	paddleint "github.com/flexprice/flexprice/internal/integration/paddle"
+	"github.com/flexprice/flexprice/internal/integration/paystack"
 	"github.com/flexprice/flexprice/internal/temporal/models"
 	invoiceTemporalModels "github.com/flexprice/flexprice/internal/temporal/models/invoice"
 	subscriptionModels "github.com/flexprice/flexprice/internal/temporal/models/subscription"
@@ -2073,31 +2074,35 @@ func (s *subscriptionService) SaveGatewayPaymentMethod(
 			Mark(ierr.ErrValidation)
 	}
 
-	sub, err := s.SubRepo.Get(ctx, subscriptionID)
-	if err != nil {
-		return err
-	}
-
-	changed := lo.FromPtr(sub.GatewayPaymentMethodID) != gatewayPaymentMethodID
-	for key, value := range metadata {
-		if sub.Metadata[key] != value {
-			changed = true
-			break
+	// Lock the row for the read-merge-write: a renewal or a concurrent capture must not have its
+	// own subscription changes clobbered by a stale in-memory copy.
+	if err := s.DB.WithTx(ctx, func(txCtx context.Context) error {
+		sub, err := s.SubRepo.GetForUpdate(txCtx, subscriptionID)
+		if err != nil {
+			return err
 		}
-	}
-	if !changed {
-		return nil
-	}
 
-	sub.GatewayPaymentMethodID = lo.ToPtr(gatewayPaymentMethodID)
-	if len(metadata) > 0 && sub.Metadata == nil {
-		sub.Metadata = types.Metadata{}
-	}
-	for key, value := range metadata {
-		sub.Metadata[key] = value
-	}
+		changed := lo.FromPtr(sub.GatewayPaymentMethodID) != gatewayPaymentMethodID
+		for key, value := range metadata {
+			if sub.Metadata[key] != value {
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			return nil
+		}
 
-	if err := s.SubRepo.Update(ctx, sub); err != nil {
+		sub.GatewayPaymentMethodID = lo.ToPtr(gatewayPaymentMethodID)
+		if len(metadata) > 0 && sub.Metadata == nil {
+			sub.Metadata = types.Metadata{}
+		}
+		for key, value := range metadata {
+			sub.Metadata[key] = value
+		}
+
+		return s.SubRepo.Update(txCtx, sub)
+	}); err != nil {
 		return ierr.WithError(err).
 			WithHint("Failed to save the gateway payment method on the subscription").
 			Mark(ierr.ErrDatabase)
@@ -2105,7 +2110,7 @@ func (s *subscriptionService) SaveGatewayPaymentMethod(
 
 	s.Logger.Info(ctx, "saved gateway payment method on subscription",
 		"subscription_id", subscriptionID,
-		"gateway_payment_method_id", gatewayPaymentMethodID)
+		"gateway_payment_method_id", paystack.MaskAuthorizationCode(gatewayPaymentMethodID))
 
 	return nil
 }

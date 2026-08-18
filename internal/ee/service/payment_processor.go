@@ -140,7 +140,9 @@ func (p *paymentProcessor) ProcessPayment(ctx context.Context, id string) (*paym
 	if paymentObj.TrackAttempts && attempt != nil {
 		if processErr != nil {
 			// For payment links, keep attempt as pending even on error
-			if paymentObj.PaymentMethodType == types.PaymentMethodTypePaymentLink {
+			// An unresolved gateway outcome is not a failed attempt either: the charge may still
+			// land, so the attempt stays pending for the webhook/reconciliation to close.
+			if paymentObj.PaymentMethodType == types.PaymentMethodTypePaymentLink || isUnresolvedGatewayOutcome(processErr) {
 				attempt.PaymentStatus = types.PaymentStatusPending
 				attempt.ErrorMessage = lo.ToPtr(processErr.Error())
 			} else {
@@ -176,6 +178,16 @@ func (p *paymentProcessor) ProcessPayment(ctx context.Context, id string) (*paym
 				paymentObj.PaymentStatus = types.PaymentStatusInitiated
 			}
 			// Don't set failed_at or error_message for payment links
+		} else if isUnresolvedGatewayOutcome(processErr) {
+			// The gateway may already have collected the money. Marking this FAILED would invite
+			// a second collection attempt, so the payment stays PROCESSING (and no payment.failed
+			// webhook fires) until the gateway webhook or a reconciliation sweep resolves it.
+			p.Logger.Error(ctx, "keeping payment as processing: gateway charge outcome unresolved",
+				"payment_id", paymentObj.ID,
+				"status", paymentObj.PaymentStatus,
+				"error", processErr.Error())
+			paymentObj.PaymentStatus = types.PaymentStatusProcessing
+			paymentObj.ErrorMessage = lo.ToPtr(processErr.Error())
 		} else {
 			// For other cases, mark as failed
 			paymentObj.PaymentStatus = types.PaymentStatusFailed
@@ -925,7 +937,7 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 	p.Logger.Info(ctx, "processing card payment",
 		"payment_id", paymentObj.ID,
 		"customer_id", paymentObj.Metadata["customer_id"],
-		"payment_method_id", paymentObj.PaymentMethodID,
+		"payment_method_id", paystack.MaskAuthorizationCode(paymentObj.PaymentMethodID),
 		"amount", paymentObj.Amount.String(),
 	)
 
@@ -1105,6 +1117,16 @@ func (p *paymentProcessor) handlePaystackCardPayment(ctx context.Context, paymen
 		Metadata:          map[string]string{"subscription_id": paymentObj.Metadata["subscription_id"]},
 	}, custSvc, invSvc)
 	if err != nil {
+		if paystack.IsChargeOutcomeUnknown(err) {
+			// The card may already have been debited. Do NOT mark this failed: ProcessPayment
+			// keeps it PROCESSING so no other collection attempt is made for the same invoice.
+			p.Logger.Error(ctx, "Paystack saved card charge outcome unknown",
+				"error", err,
+				"payment_id", paymentObj.ID,
+				"customer_id", customerID,
+			)
+			return err
+		}
 		p.markCardPaymentFailed(ctx, paymentObj, err)
 		return err
 	}
@@ -1119,11 +1141,15 @@ func (p *paymentProcessor) handlePaystackCardPayment(ctx context.Context, paymen
 
 	paymentService := NewPaymentService(p.ServiceParams)
 	if _, err := paymentService.UpdatePayment(ctx, paymentObj.ID, *updateReq); err != nil {
-		p.Logger.Error(ctx, "failed to update payment status to succeeded",
+		// Money was definitely collected and only our bookkeeping failed. Report it as collected
+		// so the caller neither retries nor falls back, and let the webhook persist the truth.
+		p.Logger.Error(ctx, "Paystack charge collected but the payment could not be marked succeeded",
 			"error", err,
 			"payment_id", paymentObj.ID,
+			"paystack_reference", result.Reference,
+			"gateway_payment_id", result.GatewayPaymentID,
 		)
-		return err
+		return paystack.NewChargeCollectedError(result.Reference, err)
 	}
 
 	p.Logger.Info(ctx, "successfully processed Paystack saved card payment",
@@ -1171,6 +1197,13 @@ func (p *paymentProcessor) markCardPaymentFailed(ctx context.Context, paymentObj
 			"payment_id", paymentObj.ID,
 		)
 	}
+}
+
+// isUnresolvedGatewayOutcome reports whether a processing error leaves money in an undecided
+// state: either the gateway outcome is unknown, or it collected and we failed to persist that.
+// Neither may be turned into a terminal FAILED payment — that invites a second collection.
+func isUnresolvedGatewayOutcome(err error) bool {
+	return paystack.IsChargeOutcomeUnknown(err) || paystack.IsChargeCollected(err)
 }
 
 // handleIncompleteSubscriptionPayment runs subscription activation / trial conversion when a qualifying

@@ -65,7 +65,11 @@ func (h *WebhookHandler) Handle(ctx context.Context, event *WebhookEvent, servic
 
 	// A reusable authorization means the customer's card can be charged again off-session at
 	// renewal. Capture it before settling the payment so every verified success path stores it.
-	h.captureReusableAuthorization(ctx, verified, payment, services)
+	// A persistence failure is returned: charge.success is idempotent, so Paystack retrying the
+	// webhook is strictly better than silently losing the saved card.
+	if err := h.captureReusableAuthorization(ctx, verified, payment, services); err != nil {
+		return err
+	}
 
 	filter := types.NewDefaultCheckoutSessionFilter()
 	filter.CheckoutPaymentIDs = []string{paymentID}
@@ -113,23 +117,23 @@ func (h *WebhookHandler) Handle(ctx context.Context, event *WebhookEvent, servic
 }
 
 // captureReusableAuthorization persists a reusable card authorization on the subscription that
-// owns the paid invoice, so renewals can charge the same card off-session. Failures are logged
-// and swallowed: the payment itself succeeded and Paystack must not retry the webhook for this.
+// owns the paid invoice, so renewals can charge the same card off-session. Nothing to capture is
+// success; a failed lookup or write is an error so the idempotent webhook is retried.
 func (h *WebhookHandler) captureReusableAuthorization(
 	ctx context.Context,
 	transaction *TransactionData,
 	paymentResp *dto.PaymentResponse,
 	services *interfaces.ServiceDependencies,
-) {
+) error {
 	authorization := transaction.Authorization
 	if authorization == nil || !authorization.Reusable || !IsAuthorizationCode(authorization.AuthorizationCode) {
-		return
+		return nil
 	}
 	if paymentResp == nil || paymentResp.DestinationType != types.PaymentDestinationTypeInvoice || paymentResp.DestinationID == "" {
-		return
+		return nil
 	}
 	if services == nil || services.InvoiceService == nil || services.SubscriptionService == nil {
-		return
+		return nil
 	}
 
 	invoiceResp, err := services.InvoiceService.GetInvoice(ctx, paymentResp.DestinationID)
@@ -138,11 +142,11 @@ func (h *WebhookHandler) captureReusableAuthorization(
 			"error", err,
 			"flexprice_payment_id", paymentResp.ID,
 			"invoice_id", paymentResp.DestinationID)
-		return
+		return err
 	}
 	subscriptionID := lo.FromPtr(invoiceResp.SubscriptionID)
 	if subscriptionID == "" {
-		return
+		return nil
 	}
 
 	metadata := map[string]string{}
@@ -170,13 +174,15 @@ func (h *WebhookHandler) captureReusableAuthorization(
 			"error", err,
 			"subscription_id", subscriptionID,
 			"flexprice_payment_id", paymentResp.ID)
-		return
+		return err
 	}
 
 	h.logger.Info(ctx, "saved reusable Paystack authorization on subscription",
 		"subscription_id", subscriptionID,
 		"flexprice_payment_id", paymentResp.ID,
 		"card_last4", authorization.Last4)
+
+	return nil
 }
 
 func resolveFlexpricePaymentID(ctx context.Context, transaction *TransactionData, services *interfaces.ServiceDependencies) (string, error) {
