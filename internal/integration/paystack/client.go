@@ -31,6 +31,8 @@ type Client interface {
 	HasConnection(ctx context.Context) bool
 	InitializeTransaction(ctx context.Context, req InitializeTransactionRequest) (*InitializeTransactionData, error)
 	VerifyTransaction(ctx context.Context, reference string) (*TransactionData, error)
+	// ChargeAuthorization charges a reusable card authorization off-session.
+	ChargeAuthorization(ctx context.Context, req ChargeAuthorizationRequest) (*TransactionData, error)
 	VerifyWebhookSignature(ctx context.Context, payload []byte, signature string) error
 }
 
@@ -128,6 +130,34 @@ func (c *client) VerifyTransaction(ctx context.Context, reference string) (*Tran
 	if !response.Status || response.Data.Reference == "" {
 		return nil, ierr.NewError("Paystack returned an invalid verification response").
 			WithHint("Paystack did not verify the transaction").
+			Mark(ierr.ErrHTTPClient)
+	}
+	return &response.Data, nil
+}
+
+func (c *client) ChargeAuthorization(ctx context.Context, req ChargeAuthorizationRequest) (*TransactionData, error) {
+	if req.AuthorizationCode == "" {
+		return nil, ierr.NewError("paystack authorization code is required").
+			WithHint("Charge a saved Paystack card only after an authorization was captured").
+			Mark(ierr.ErrValidation)
+	}
+	if req.Email == "" {
+		return nil, ierr.NewError("paystack customer email is required").
+			WithHint("Paystack requires the authorization owner's email to charge it").
+			Mark(ierr.ErrValidation)
+	}
+	if req.Amount <= 0 {
+		return nil, ierr.NewError("paystack charge amount must be greater than zero").Mark(ierr.ErrValidation)
+	}
+
+	var response chargeAuthorizationResponse
+	if err := c.send(ctx, http.MethodPost, "/transaction/charge_authorization", req, &response); err != nil {
+		return nil, err
+	}
+	if !response.Status || response.Data.Status == "" {
+		return nil, ierr.NewError("Paystack returned an invalid charge response").
+			WithHint("Paystack did not accept the saved card charge").
+			WithReportableDetails(map[string]any{"paystack_message": response.Message, "reference": req.Reference}).
 			Mark(ierr.ErrHTTPClient)
 	}
 	return &response.Data, nil

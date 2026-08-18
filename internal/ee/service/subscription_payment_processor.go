@@ -7,8 +7,10 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/subscription"
 	"github.com/flexprice/flexprice/internal/domain/wallet"
 	ierr "github.com/flexprice/flexprice/internal/errors"
+	"github.com/flexprice/flexprice/internal/integration/paystack"
 	"github.com/flexprice/flexprice/internal/types"
 
+	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
 
@@ -711,44 +713,55 @@ func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 		"amount", amount,
 	)
 
-	// Check if tenant has Stripe connection
-	if !s.hasStripeConnection(ctx) {
-		s.Logger.Info(context.Background(), "no Stripe connection available for payment method charge",
-			"subscription_id", sub.ID,
-		)
-		return decimal.Zero
-	}
-
-	// Get Stripe integration
-	stripeIntegration, err := s.IntegrationFactory.GetStripeIntegration(ctx)
-	if err != nil {
-		s.Logger.Info(context.Background(), "failed to get Stripe integration",
-			"subscription_id", sub.ID,
-			"error", err,
-		)
-		return decimal.Zero
-	}
-
-	// Check if customer has Stripe entity mapping
-	// Use invoicing customer ID for Stripe operations - payment should use invoicing customer's payment methods
+	// Pick the gateway that can charge a saved payment method for this subscription. Paystack
+	// keeps a reusable card authorization on the subscription itself; Stripe resolves a payment
+	// method from the subscription or the invoicing customer's default.
 	invoicingCustomerID := sub.GetInvoicingCustomerID()
-	customerService := NewCustomerService(*s.ServiceParams)
-	if !stripeIntegration.CustomerSvc.HasCustomerStripeMapping(ctx, invoicingCustomerID, customerService) {
-		s.Logger.Info(context.Background(), "no Stripe entity mapping found for invoicing customer",
-			"subscription_id", sub.ID,
-			"subscription_customer_id", sub.CustomerID,
-			"invoicing_customer_id", invoicingCustomerID,
-		)
-		return decimal.Zero
-	}
+	var paymentGateway *types.PaymentGatewayType
+	var paymentMethodID string
 
-	// Get payment method ID - use invoicing customer's payment methods
-	paymentMethodID := s.getPaymentMethodID(ctx, sub, invoicingCustomerID)
-	if paymentMethodID == "" {
-		s.Logger.Info(context.Background(), "no payment method available for automatic charging",
-			"subscription_id", sub.ID,
-		)
-		return decimal.Zero
+	if authorizationCode, ok := s.paystackSavedAuthorization(ctx, sub); ok {
+		paymentGateway = lo.ToPtr(types.PaymentGatewayTypePaystack)
+		paymentMethodID = authorizationCode
+	} else {
+		// Check if tenant has Stripe connection
+		if !s.hasStripeConnection(ctx) {
+			s.Logger.Info(context.Background(), "no Stripe connection available for payment method charge",
+				"subscription_id", sub.ID,
+			)
+			return decimal.Zero
+		}
+
+		// Get Stripe integration
+		stripeIntegration, err := s.IntegrationFactory.GetStripeIntegration(ctx)
+		if err != nil {
+			s.Logger.Info(context.Background(), "failed to get Stripe integration",
+				"subscription_id", sub.ID,
+				"error", err,
+			)
+			return decimal.Zero
+		}
+
+		// Check if customer has Stripe entity mapping
+		// Use invoicing customer ID for Stripe operations - payment should use invoicing customer's payment methods
+		customerService := NewCustomerService(*s.ServiceParams)
+		if !stripeIntegration.CustomerSvc.HasCustomerStripeMapping(ctx, invoicingCustomerID, customerService) {
+			s.Logger.Info(context.Background(), "no Stripe entity mapping found for invoicing customer",
+				"subscription_id", sub.ID,
+				"subscription_customer_id", sub.CustomerID,
+				"invoicing_customer_id", invoicingCustomerID,
+			)
+			return decimal.Zero
+		}
+
+		// Get payment method ID - use invoicing customer's payment methods
+		paymentMethodID = s.getPaymentMethodID(ctx, sub, invoicingCustomerID)
+		if paymentMethodID == "" {
+			s.Logger.Info(context.Background(), "no payment method available for automatic charging",
+				"subscription_id", sub.ID,
+			)
+			return decimal.Zero
+		}
 	}
 
 	// Create payment record for card payment
@@ -758,6 +771,7 @@ func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 		DestinationID:     inv.ID,
 		PaymentMethodType: types.PaymentMethodTypeCard,
 		PaymentMethodID:   paymentMethodID,
+		PaymentGateway:    paymentGateway,
 		Amount:            amount,
 		Currency:          inv.Currency,
 		ProcessPayment:    true,
@@ -878,6 +892,45 @@ func (s *subscriptionPaymentProcessor) hasStripeConnection(ctx context.Context) 
 		"connection_id", conn.ID,
 		"provider", conn.ProviderType,
 	)
+
+	return true
+}
+
+// paystackSavedAuthorization returns the subscription's reusable Paystack card authorization
+// when the environment can actually charge it. Absent either, the caller keeps the Stripe path.
+func (s *subscriptionPaymentProcessor) paystackSavedAuthorization(ctx context.Context, sub *subscription.Subscription) (string, bool) {
+	authorizationCode := lo.FromPtr(sub.GatewayPaymentMethodID)
+	if !paystack.IsAuthorizationCode(authorizationCode) {
+		return "", false
+	}
+
+	if !s.hasPaystackConnection(ctx) {
+		s.Logger.Info(ctx, "subscription has a Paystack authorization but no Paystack connection",
+			"subscription_id", sub.ID,
+		)
+		return "", false
+	}
+
+	s.Logger.Info(ctx, "using saved Paystack authorization for automatic charging",
+		"subscription_id", sub.ID,
+	)
+	return authorizationCode, true
+}
+
+// hasPaystackConnection checks if the tenant has a Paystack connection available
+func (s *subscriptionPaymentProcessor) hasPaystackConnection(ctx context.Context) bool {
+	conn, err := s.ConnectionRepo.GetByProvider(ctx, types.SecretProviderPaystack)
+	if err != nil {
+		s.Logger.Debug(ctx, "no Paystack connection found",
+			"error", err,
+		)
+		return false
+	}
+
+	if conn == nil {
+		s.Logger.Debug(ctx, "Paystack connection is nil")
+		return false
+	}
 
 	return true
 }

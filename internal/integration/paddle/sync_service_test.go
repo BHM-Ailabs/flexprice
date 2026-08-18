@@ -881,6 +881,9 @@ func (m *mockSubscriptionService) GetSubscriptionV2(ctx context.Context, id stri
 func (m *mockSubscriptionService) UpdateSubscription(ctx context.Context, subscriptionID string, req apidto.UpdateSubscriptionRequest) (*apidto.SubscriptionResponse, error) {
 	return nil, nil
 }
+func (m *mockSubscriptionService) SaveGatewayPaymentMethod(ctx context.Context, subscriptionID string, gatewayPaymentMethodID string, metadata map[string]string) error {
+	return nil
+}
 func (m *mockSubscriptionService) CancelSubscription(ctx context.Context, subscriptionID string, req *apidto.CancelSubscriptionRequest) (*apidto.CancelSubscriptionResponse, error) {
 	return nil, nil
 }

@@ -961,6 +961,12 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 		"payment_id", paymentObj.ID,
 	)
 
+	// Paystack-collected subscriptions charge a saved card authorization instead of a Stripe
+	// payment method. Everything else keeps the Stripe path below.
+	if isPaystackCardPayment(paymentObj) {
+		return p.handlePaystackCardPayment(ctx, paymentObj, customerID)
+	}
+
 	// Get Stripe integration
 	stripeIntegration, err := p.IntegrationFactory.GetStripeIntegration(ctx)
 	if err != nil {
@@ -1020,21 +1026,7 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 
 	paymentIntentResp, err := stripeIntegration.PaymentSvc.ChargeSavedPaymentMethod(ctx, chargeReq, custSvc, invSvc)
 	if err != nil {
-		// Update payment status to failed
-		updateReq := &dto.UpdatePaymentRequest{
-			PaymentStatus: lo.ToPtr(string(types.PaymentStatusFailed)),
-			ErrorMessage:  lo.ToPtr(err.Error()),
-			FailedAt:      lo.ToPtr(time.Now().UTC()),
-		}
-
-		paymentService := NewPaymentService(p.ServiceParams)
-		if _, updateErr := paymentService.UpdatePayment(ctx, paymentObj.ID, *updateReq); updateErr != nil {
-			p.Logger.Error(ctx, "failed to update payment status to failed",
-				"error", updateErr,
-				"payment_id", paymentObj.ID,
-			)
-		}
-
+		p.markCardPaymentFailed(ctx, paymentObj, err)
 		return err
 	}
 
@@ -1065,6 +1057,120 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 	)
 
 	return nil
+}
+
+// isPaystackCardPayment reports whether a card payment must be charged through Paystack: either
+// the payment was created for that gateway, or its payment method is a Paystack authorization code.
+func isPaystackCardPayment(paymentObj *payment.Payment) bool {
+	if lo.FromPtr(paymentObj.PaymentGateway) == string(types.PaymentGatewayTypePaystack) {
+		return true
+	}
+	return paystack.IsAuthorizationCode(paymentObj.PaymentMethodID)
+}
+
+// handlePaystackCardPayment charges a saved Paystack card authorization off-session. On success the
+// payment is marked succeeded, which lets the generic post-processing settle the invoice; on failure
+// the payment is marked failed and the error is returned so wallet fallback and dunning still run.
+func (p *paymentProcessor) handlePaystackCardPayment(ctx context.Context, paymentObj *payment.Payment, customerID string) error {
+	if !paystack.IsAuthorizationCode(paymentObj.PaymentMethodID) {
+		err := ierr.NewError("no saved Paystack authorization for this payment").
+			WithHint("Collect a payment with a reusable card before charging it off-session").
+			WithReportableDetails(map[string]interface{}{
+				"payment_id":  paymentObj.ID,
+				"customer_id": customerID,
+			}).
+			Mark(ierr.ErrValidation)
+		p.markCardPaymentFailed(ctx, paymentObj, err)
+		return err
+	}
+
+	paystackIntegration, err := p.IntegrationFactory.GetPaystackIntegration(ctx)
+	if err != nil {
+		return ierr.WithError(err).
+			WithHint("Failed to get Paystack integration").
+			Mark(ierr.ErrSystem)
+	}
+
+	custSvc := NewCustomerService(p.ServiceParams)
+	invSvc := NewInvoiceService(p.ServiceParams)
+
+	result, err := paystackIntegration.PaymentSvc.ChargeSavedAuthorization(ctx, &paystack.ChargeAuthorizationParams{
+		InvoiceID:         paymentObj.DestinationID,
+		CustomerID:        customerID,
+		PaymentID:         paymentObj.ID,
+		Amount:            paymentObj.Amount,
+		Currency:          paymentObj.Currency,
+		AuthorizationCode: paymentObj.PaymentMethodID,
+		Email:             p.savedPaystackEmail(ctx, paymentObj),
+		Metadata:          map[string]string{"subscription_id": paymentObj.Metadata["subscription_id"]},
+	}, custSvc, invSvc)
+	if err != nil {
+		p.markCardPaymentFailed(ctx, paymentObj, err)
+		return err
+	}
+
+	updateReq := &dto.UpdatePaymentRequest{
+		PaymentStatus:    lo.ToPtr(string(types.PaymentStatusSucceeded)),
+		GatewayPaymentID: lo.ToPtr(result.GatewayPaymentID),
+		PaymentGateway:   lo.ToPtr(string(types.PaymentGatewayTypePaystack)),
+		PaymentMethodID:  lo.ToPtr(paymentObj.PaymentMethodID),
+		SucceededAt:      lo.ToPtr(time.Now().UTC()),
+	}
+
+	paymentService := NewPaymentService(p.ServiceParams)
+	if _, err := paymentService.UpdatePayment(ctx, paymentObj.ID, *updateReq); err != nil {
+		p.Logger.Error(ctx, "failed to update payment status to succeeded",
+			"error", err,
+			"payment_id", paymentObj.ID,
+		)
+		return err
+	}
+
+	p.Logger.Info(ctx, "successfully processed Paystack saved card payment",
+		"payment_id", paymentObj.ID,
+		"customer_id", customerID,
+		"paystack_reference", result.Reference,
+		"gateway_payment_id", result.GatewayPaymentID,
+		"amount", paymentObj.Amount.String(),
+	)
+
+	return nil
+}
+
+// savedPaystackEmail returns the Paystack customer email captured with the authorization, so the
+// charge uses the email the card is actually bound to. Empty falls back to the FlexPrice customer.
+func (p *paymentProcessor) savedPaystackEmail(ctx context.Context, paymentObj *payment.Payment) string {
+	subscriptionID := paymentObj.Metadata["subscription_id"]
+	if subscriptionID == "" || p.SubRepo == nil {
+		return ""
+	}
+	sub, err := p.SubRepo.Get(ctx, subscriptionID)
+	if err != nil {
+		p.Logger.Info(ctx, "unable to load subscription for saved Paystack email",
+			"error", err,
+			"payment_id", paymentObj.ID,
+			"subscription_id", subscriptionID,
+		)
+		return ""
+	}
+	return sub.Metadata[paystack.MetadataKeyCustomerEmail]
+}
+
+// markCardPaymentFailed records a failed card charge on the payment record.
+func (p *paymentProcessor) markCardPaymentFailed(ctx context.Context, paymentObj *payment.Payment, cause error) {
+	updateReq := &dto.UpdatePaymentRequest{
+		PaymentStatus: lo.ToPtr(string(types.PaymentStatusFailed)),
+		ErrorMessage:  lo.ToPtr(cause.Error()),
+		FailedAt:      lo.ToPtr(time.Now().UTC()),
+	}
+
+	paymentService := NewPaymentService(p.ServiceParams)
+	if _, updateErr := paymentService.UpdatePayment(ctx, paymentObj.ID, *updateReq); updateErr != nil {
+		p.Logger.Error(ctx, "failed to update payment status to failed",
+			"error", updateErr,
+			"payment_id", paymentObj.ID,
+		)
+	}
 }
 
 // handleIncompleteSubscriptionPayment runs subscription activation / trial conversion when a qualifying

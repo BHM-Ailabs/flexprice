@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flexprice/flexprice/internal/api/dto"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/integration/payments"
 	"github.com/flexprice/flexprice/internal/interfaces"
@@ -37,7 +38,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, event *WebhookEvent, servic
 	if err != nil {
 		return err
 	}
-	if verified.Status != "success" || verified.Reference != event.Data.Reference {
+	if verified.Status != transactionStatusSuccess || verified.Reference != event.Data.Reference {
 		return ierr.NewError("Paystack transaction verification did not succeed").
 			WithHint("Wait for a verified charge.success transaction").
 			Mark(ierr.ErrValidation)
@@ -61,6 +62,10 @@ func (h *WebhookHandler) Handle(ctx context.Context, event *WebhookEvent, servic
 	if verified.ID != 0 {
 		gatewayPaymentID = fmt.Sprintf("%d", verified.ID)
 	}
+
+	// A reusable authorization means the customer's card can be charged again off-session at
+	// renewal. Capture it before settling the payment so every verified success path stores it.
+	h.captureReusableAuthorization(ctx, verified, payment, services)
 
 	filter := types.NewDefaultCheckoutSessionFilter()
 	filter.CheckoutPaymentIDs = []string{paymentID}
@@ -105,6 +110,73 @@ func (h *WebhookHandler) Handle(ctx context.Context, event *WebhookEvent, servic
 		GatewayPaymentID:   gatewayPaymentID,
 		SucceededAt:        succeededAt,
 	})
+}
+
+// captureReusableAuthorization persists a reusable card authorization on the subscription that
+// owns the paid invoice, so renewals can charge the same card off-session. Failures are logged
+// and swallowed: the payment itself succeeded and Paystack must not retry the webhook for this.
+func (h *WebhookHandler) captureReusableAuthorization(
+	ctx context.Context,
+	transaction *TransactionData,
+	paymentResp *dto.PaymentResponse,
+	services *interfaces.ServiceDependencies,
+) {
+	authorization := transaction.Authorization
+	if authorization == nil || !authorization.Reusable || !IsAuthorizationCode(authorization.AuthorizationCode) {
+		return
+	}
+	if paymentResp == nil || paymentResp.DestinationType != types.PaymentDestinationTypeInvoice || paymentResp.DestinationID == "" {
+		return
+	}
+	if services == nil || services.InvoiceService == nil || services.SubscriptionService == nil {
+		return
+	}
+
+	invoiceResp, err := services.InvoiceService.GetInvoice(ctx, paymentResp.DestinationID)
+	if err != nil {
+		h.logger.Error(ctx, "unable to load invoice while capturing Paystack authorization",
+			"error", err,
+			"flexprice_payment_id", paymentResp.ID,
+			"invoice_id", paymentResp.DestinationID)
+		return
+	}
+	subscriptionID := lo.FromPtr(invoiceResp.SubscriptionID)
+	if subscriptionID == "" {
+		return
+	}
+
+	metadata := map[string]string{}
+	if transaction.Customer != nil && transaction.Customer.Email != "" {
+		metadata[MetadataKeyCustomerEmail] = transaction.Customer.Email
+	}
+	if authorization.Last4 != "" {
+		metadata[MetadataKeyCardLast4] = authorization.Last4
+	}
+	if authorization.CardType != "" {
+		metadata[MetadataKeyCardType] = authorization.CardType
+	}
+	if authorization.Bank != "" {
+		metadata[MetadataKeyCardBank] = authorization.Bank
+	}
+	if authorization.ExpMonth != "" {
+		metadata[MetadataKeyCardExpMonth] = authorization.ExpMonth
+	}
+	if authorization.ExpYear != "" {
+		metadata[MetadataKeyCardExpYear] = authorization.ExpYear
+	}
+
+	if err := services.SubscriptionService.SaveGatewayPaymentMethod(ctx, subscriptionID, authorization.AuthorizationCode, metadata); err != nil {
+		h.logger.Error(ctx, "failed to save Paystack authorization on subscription",
+			"error", err,
+			"subscription_id", subscriptionID,
+			"flexprice_payment_id", paymentResp.ID)
+		return
+	}
+
+	h.logger.Info(ctx, "saved reusable Paystack authorization on subscription",
+		"subscription_id", subscriptionID,
+		"flexprice_payment_id", paymentResp.ID,
+		"card_last4", authorization.Last4)
 }
 
 func resolveFlexpricePaymentID(ctx context.Context, transaction *TransactionData, services *interfaces.ServiceDependencies) (string, error) {

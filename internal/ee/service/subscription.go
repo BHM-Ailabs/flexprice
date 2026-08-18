@@ -2058,6 +2058,58 @@ func (s *subscriptionService) UpdateSubscription(ctx context.Context, subscripti
 	return s.GetSubscription(ctx, subscriptionID)
 }
 
+// SaveGatewayPaymentMethod persists a reusable gateway payment method on the subscription so
+// renewals can charge it off-session, merging the supplied descriptors (card last4, bank,
+// gateway customer email) into the subscription metadata. It is a no-op when nothing changes.
+func (s *subscriptionService) SaveGatewayPaymentMethod(
+	ctx context.Context,
+	subscriptionID string,
+	gatewayPaymentMethodID string,
+	metadata map[string]string,
+) error {
+	if subscriptionID == "" || gatewayPaymentMethodID == "" {
+		return ierr.NewError("subscription id and gateway payment method id are required").
+			WithHint("Provide the subscription and the gateway payment method to save").
+			Mark(ierr.ErrValidation)
+	}
+
+	sub, err := s.SubRepo.Get(ctx, subscriptionID)
+	if err != nil {
+		return err
+	}
+
+	changed := lo.FromPtr(sub.GatewayPaymentMethodID) != gatewayPaymentMethodID
+	for key, value := range metadata {
+		if sub.Metadata[key] != value {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return nil
+	}
+
+	sub.GatewayPaymentMethodID = lo.ToPtr(gatewayPaymentMethodID)
+	if len(metadata) > 0 && sub.Metadata == nil {
+		sub.Metadata = types.Metadata{}
+	}
+	for key, value := range metadata {
+		sub.Metadata[key] = value
+	}
+
+	if err := s.SubRepo.Update(ctx, sub); err != nil {
+		return ierr.WithError(err).
+			WithHint("Failed to save the gateway payment method on the subscription").
+			Mark(ierr.ErrDatabase)
+	}
+
+	s.Logger.Info(ctx, "saved gateway payment method on subscription",
+		"subscription_id", subscriptionID,
+		"gateway_payment_method_id", gatewayPaymentMethodID)
+
+	return nil
+}
+
 // CancelSubscription provides enhanced cancellation with proration support
 func (s *subscriptionService) CancelSubscription(
 	ctx context.Context,
