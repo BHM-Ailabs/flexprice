@@ -1774,28 +1774,40 @@ func (s *invoiceService) UpdatePaymentStatus(ctx context.Context, id string, sta
 			Mark(ierr.ErrValidation)
 	}
 
-	// Validate that there shouldnt be any payments for this invoice (for manual updates)
+	// Manual updates normally cannot overwrite payment-backed invoices. The one safe repair is
+	// normalizing to SUCCEEDED when immutable succeeded payment records exactly cover amount_due.
+	// This repairs duplicated reconciliation totals without deleting gateway evidence or changing
+	// the amount actually collected.
 	paymentService := NewPaymentService(s.ServiceParams)
 	filter := types.NewNoLimitPaymentFilter()
 	filter.DestinationID = lo.ToPtr(id)
 	filter.Status = lo.ToPtr(types.StatusPublished)
 	filter.PaymentStatus = lo.ToPtr(string(types.PaymentStatusSucceeded))
 	filter.DestinationType = lo.ToPtr(string(types.PaymentDestinationTypeInvoice))
-	filter.Limit = lo.ToPtr(1)
 	payments, err := paymentService.ListPayments(ctx, filter)
 	if err != nil {
 		return err
 	}
 
+	paymentBackedRepair := false
 	if len(payments.Items) > 0 {
-		return ierr.NewError("invoice has active payment records").
-			WithHint("Manual payment status updates are disabled for payment-based invoices.").
-			Mark(ierr.ErrInvalidOperation)
+		succeededTotal := decimal.Zero
+		for _, payment := range payments.Items {
+			succeededTotal = succeededTotal.Add(payment.Amount)
+		}
+		if status != types.PaymentStatusSucceeded || !succeededTotal.Equal(inv.AmountDue) {
+			return ierr.NewError("invoice has active payment records").
+				WithHint("Manual payment updates are only allowed when succeeded payments exactly cover the invoice.").
+				Mark(ierr.ErrInvalidOperation)
+		}
+		paymentBackedRepair = true
 	}
 
-	// Validate the payment status transition
-	if err := s.validatePaymentStatusTransition(inv.PaymentStatus, status); err != nil {
-		return err
+	// OVERPAID -> SUCCEEDED is intentionally permitted only for the exact-coverage repair above.
+	if !paymentBackedRepair {
+		if err := s.validatePaymentStatusTransition(inv.PaymentStatus, status); err != nil {
+			return err
+		}
 	}
 
 	// Validate the request amount
