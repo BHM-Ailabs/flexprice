@@ -896,9 +896,16 @@ func NewConfig() (*Configuration, error) {
 		cfg.Auth.APIKey.Keys = apiKeys
 	}
 
-	// tenant webhook config
+	// Tenant webhook config. Maps are not auto-bound by bindEnvs because Viper's
+	// mapstructure path cannot reliably decode a JSON environment value. Parse
+	// the explicit override directly so managed runtimes can inject endpoints
+	// and headers without baking secrets into config.yaml or the container image.
 	tenantWebhookConfig := make(map[string]TenantWebhookConfig)
-	if err := v.UnmarshalKey("webhook.tenants", &tenantWebhookConfig); err != nil {
+	if raw := os.Getenv("FLEXPRICE_WEBHOOK_TENANTS"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &tenantWebhookConfig); err != nil {
+			return nil, fmt.Errorf("failed to parse FLEXPRICE_WEBHOOK_TENANTS JSON: %v", err)
+		}
+	} else if err := v.UnmarshalKey("webhook.tenants", &tenantWebhookConfig); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal webhook tenants config: %v", err)
 	}
 	cfg.Webhook.Tenants = tenantWebhookConfig
