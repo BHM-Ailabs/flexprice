@@ -182,6 +182,27 @@ type AuthConfig struct {
 	Secret   string             `mapstructure:"secret" validate:"required"`
 	Supabase SupabaseConfig     `mapstructure:"supabase"`
 	APIKey   APIKeyConfig       `mapstructure:"api_key"`
+	Plaqad   PlaqadAuthConfig   `mapstructure:"plaqad"`
+}
+
+// PlaqadAuthConfig makes Plaqad Auth the authority for human dashboard
+// sessions. API keys remain available for machine-to-machine integrations, but
+// when Enabled is true every Bearer token is checked live against Auth's
+// /api/v1/admin/me endpoint and native Flexprice JWTs are not accepted.
+//
+// TenantID and UserID identify the local Flexprice dashboard principal whose
+// environment access is used after Plaqad has proved that the caller is a
+// current Super Admin. That user must exist, be published, and retain the
+// super_admin role; this keeps both authorities revocable.
+type PlaqadAuthConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	BaseURL        string `mapstructure:"base_url"`
+	ClientID       string `mapstructure:"client_id"`
+	ClientSecret   string `mapstructure:"client_secret"`
+	RedirectURI    string `mapstructure:"redirect_uri"`
+	TenantID       string `mapstructure:"tenant_id"`
+	UserID         string `mapstructure:"user_id"`
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
 }
 
 type SupabaseConfig struct {
@@ -1024,6 +1045,14 @@ func (c Configuration) validateSecrets() error {
 	// supabase service key — required only when supabase is the auth provider.
 	if c.Auth.Provider == types.AuthProviderSupabase && isPlaceholder(c.Auth.Supabase.ServiceKey) {
 		bad = append(bad, "auth.supabase.service_key (FLEXPRICE_AUTH_SUPABASE_SERVICE_KEY)")
+	}
+	if c.Auth.Plaqad.Enabled {
+		if isPlaceholder(c.Auth.Plaqad.ClientSecret) {
+			bad = append(bad, "auth.plaqad.client_secret (FLEXPRICE_AUTH_PLAQAD_CLIENT_SECRET)")
+		}
+		if strings.TrimSpace(c.Auth.Plaqad.BaseURL) == "" || strings.TrimSpace(c.Auth.Plaqad.ClientID) == "" || strings.TrimSpace(c.Auth.Plaqad.RedirectURI) == "" || strings.TrimSpace(c.Auth.Plaqad.TenantID) == "" || strings.TrimSpace(c.Auth.Plaqad.UserID) == "" {
+			bad = append(bad, "auth.plaqad control-plane mapping")
+		}
 	}
 	// svix token — required only when the Svix webhook backend is on.
 	if c.Webhook.Svix.Enabled && isPlaceholder(c.Webhook.Svix.AuthToken) {

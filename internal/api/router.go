@@ -141,6 +141,7 @@ func NewRouter(
 		// Auth routes
 		v1Public.POST("/auth/signup", handlers.Auth.SignUp)
 		v1Public.POST("/auth/login", handlers.Auth.Login)
+		v1Public.POST("/auth/plaqad/callback", handlers.Auth.PlaqadCallback)
 	}
 
 	private := router.Group("/", middleware.AuthenticateMiddleware(cfg, secretService, environmentRepo, userRepo, logger))

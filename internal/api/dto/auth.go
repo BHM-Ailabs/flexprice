@@ -24,6 +24,23 @@ type AuthResponse struct {
 	TenantID string `json:"tenant_id"`
 }
 
+type PlaqadCallbackRequest struct {
+	Code         string `json:"code" binding:"required"`
+	CodeVerifier string `json:"code_verifier" binding:"required"`
+}
+
+type PlaqadCallbackResponse struct {
+	Token     string          `json:"token"`
+	ExpiresAt int64           `json:"expiresAt"`
+	User      PlaqadTokenUser `json:"user"`
+}
+
+type PlaqadTokenUser struct {
+	ID    string `json:"sub"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
 func (r *SignUpRequest) Validate() error {
 	return validator.ValidateRequest(r)
 }
