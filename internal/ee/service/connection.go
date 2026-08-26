@@ -32,6 +32,62 @@ type connectionService struct {
 	encryptionService security.EncryptionService
 }
 
+func validateStripeConnectionForCreate(providerType types.SecretProvider, metadata types.ConnectionMetadata) error {
+	if providerType != types.SecretProviderStripe {
+		return nil
+	}
+	if metadata.Stripe == nil {
+		return ierr.NewError("stripe connection requires publishable_key, secret_key and webhook_secret").
+			WithHint("encrypted_secret_data.stripe with publishable_key, secret_key and webhook_secret is required").
+			Mark(ierr.ErrValidation)
+	}
+	return metadata.Stripe.Validate()
+}
+
+// mergeStripeCredentialUpdate encrypts only supplied plaintext values and
+// preserves every unspecified ciphertext. This allows independent key and
+// webhook-secret rotation without decrypting old credentials or accidentally
+// replacing them with empty strings.
+func (s *connectionService) mergeStripeCredentialUpdate(existing, update *types.StripeConnectionMetadata) (*types.StripeConnectionMetadata, error) {
+	if update == nil {
+		return existing, nil
+	}
+	if existing == nil {
+		if err := update.Validate(); err != nil {
+			return nil, err
+		}
+		existing = &types.StripeConnectionMetadata{}
+	}
+
+	merged := *existing
+	var err error
+	if update.PublishableKey != "" {
+		merged.PublishableKey, err = s.encryptionService.Encrypt(update.PublishableKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if update.SecretKey != "" {
+		merged.SecretKey, err = s.encryptionService.Encrypt(update.SecretKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if update.WebhookSecret != "" {
+		merged.WebhookSecret, err = s.encryptionService.Encrypt(update.WebhookSecret)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if update.AccountID != "" {
+		merged.AccountID = update.AccountID
+	}
+	if err := merged.Validate(); err != nil {
+		return nil, err
+	}
+	return &merged, nil
+}
+
 // NewConnectionService creates a new connection service
 func NewConnectionService(
 	params ServiceParams,
@@ -570,6 +626,9 @@ func (s *connectionService) CreateConnection(ctx context.Context, req dto.Create
 	if err := req.SyncConfig.Validate(); err != nil {
 		return nil, err
 	}
+	if err := validateStripeConnectionForCreate(req.ProviderType, req.EncryptedSecretData); err != nil {
+		return nil, err
+	}
 
 	// Check for existing published connection with same provider, tenant, and environment
 	existingFilter := &types.ConnectionFilter{
@@ -969,6 +1028,22 @@ func (s *connectionService) UpdateConnection(ctx context.Context, id string, req
 			return nil, err
 		}
 		conn.EncryptedSecretData.Paystack = encryptedMetadata.Paystack
+	}
+
+	if req.EncryptedSecretData != nil && req.EncryptedSecretData.Stripe != nil {
+		if conn.ProviderType != types.SecretProviderStripe {
+			return nil, ierr.NewError("Stripe credential update is only valid for stripe connections").
+				Mark(ierr.ErrValidation)
+		}
+		merged, mergeErr := s.mergeStripeCredentialUpdate(
+			conn.EncryptedSecretData.Stripe,
+			req.EncryptedSecretData.Stripe,
+		)
+		if mergeErr != nil {
+			s.Logger.Error(ctx, "failed to encrypt Stripe credential update", "error", mergeErr, "connection_id", id)
+			return nil, mergeErr
+		}
+		conn.EncryptedSecretData.Stripe = merged
 	}
 
 	// Zoho Books: merge webhook_secret only (plaintext from API → encrypted at rest)

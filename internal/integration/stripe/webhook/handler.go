@@ -67,7 +67,13 @@ func (h *Handler) HandleWebhookEvent(ctx context.Context, event *stripeapi.Event
 	case string(types.WebhookEventTypeCustomerCreated):
 		return h.handleCustomerCreated(ctx, event, environmentID, services)
 	case string(types.WebhookEventTypeCheckoutSessionCompleted):
-		return h.handleCheckoutSessionCompleted(ctx, event, environmentID, services)
+		return h.handleCheckoutSessionSucceeded(ctx, event, environmentID, services, false)
+	case string(types.WebhookEventTypeCheckoutSessionAsyncPaymentSucceeded):
+		return h.handleCheckoutSessionSucceeded(ctx, event, environmentID, services, true)
+	case string(types.WebhookEventTypeCheckoutSessionAsyncPaymentFailed):
+		return h.handleCheckoutSessionTerminalFailure(ctx, event, services, false)
+	case string(types.WebhookEventTypeCheckoutSessionExpired):
+		return h.handleCheckoutSessionTerminalFailure(ctx, event, services, true)
 	case string(types.WebhookEventTypePaymentIntentSucceeded):
 		return h.handlePaymentIntentSucceeded(ctx, event, environmentID, services)
 	case string(types.WebhookEventTypePaymentIntentPaymentFailed):
@@ -107,8 +113,8 @@ func (h *Handler) handleCustomerCreated(ctx context.Context, event *stripeapi.Ev
 	var stripeCustomer stripeapi.Customer
 	err := json.Unmarshal(event.Data.Raw, &stripeCustomer)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse customer from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse customer from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "received customer.created webhook",
@@ -121,11 +127,11 @@ func (h *Handler) handleCustomerCreated(ctx context.Context, event *stripeapi.Ev
 	// Create customer in our system from Stripe data
 	err = h.customerSvc.CreateCustomerFromStripe(ctx, &stripeCustomer, environmentID, services.CustomerService)
 	if err != nil {
-		h.logger.Error(ctx, "failed to create customer from Stripe webhook, skipping event",
+		h.logger.Error(ctx, "failed to create customer from Stripe webhook",
 			"error", err,
 			"stripe_customer_id", stripeCustomer.ID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully created customer from Stripe webhook",
@@ -142,8 +148,8 @@ func (h *Handler) handlePaymentIntentSucceeded(ctx context.Context, event *strip
 	var webhookPaymentIntent stripeapi.PaymentIntent
 	err := json.Unmarshal(event.Data.Raw, &webhookPaymentIntent)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse payment intent from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse payment intent from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	paymentIntentID := webhookPaymentIntent.ID
@@ -157,11 +163,11 @@ func (h *Handler) handlePaymentIntentSucceeded(ctx context.Context, event *strip
 	// Fetch the latest payment intent data from Stripe API instead of relying on webhook data
 	paymentIntent, err := h.paymentSvc.GetPaymentIntent(ctx, paymentIntentID, environmentID)
 	if err != nil {
-		h.logger.Error(ctx, "failed to fetch payment intent from Stripe API, skipping event",
+		h.logger.Error(ctx, "failed to fetch payment intent from Stripe API",
 			"error", err,
 			"payment_intent_id", paymentIntentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	h.logger.Info(ctx, "fetched payment intent from Stripe API",
@@ -183,12 +189,12 @@ func (h *Handler) handlePaymentIntentSucceeded(ctx context.Context, event *strip
 
 		payment, err := services.PaymentService.GetPayment(ctx, flexpricePaymentID)
 		if err != nil {
-			h.logger.Error(ctx, "failed to get FlexPrice payment, skipping event",
+			h.logger.Error(ctx, "failed to get FlexPrice payment",
 				"error", err,
 				"flexprice_payment_id", flexpricePaymentID,
 				"payment_intent_id", paymentIntent.ID,
 				"event_id", event.ID)
-			return nil
+			return err
 		}
 
 		// Skip card payments - they're handled synchronously by charge API
@@ -214,11 +220,11 @@ func (h *Handler) handlePaymentIntentSucceeded(ctx context.Context, event *strip
 	// No flexprice_payment_id - this is an external Stripe payment
 	err = h.paymentSvc.HandleExternalStripePaymentFromWebhook(ctx, paymentIntent, event.Data.Raw, services.PaymentService, services.InvoiceService)
 	if err != nil {
-		h.logger.Error(ctx, "failed to handle external Stripe payment from webhook, skipping event",
+		h.logger.Error(ctx, "failed to handle external Stripe payment from webhook",
 			"error", err,
 			"payment_intent_id", paymentIntent.ID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 	return nil
 }
@@ -229,8 +235,8 @@ func (h *Handler) handlePaymentIntentPaymentFailed(ctx context.Context, event *s
 	var paymentIntent stripeapi.PaymentIntent
 	err := json.Unmarshal(event.Data.Raw, &paymentIntent)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse payment intent from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse payment intent from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	paymentIntentID := paymentIntent.ID
@@ -258,12 +264,12 @@ func (h *Handler) handlePaymentIntentPaymentFailed(ctx context.Context, event *s
 	// Get payment record by flexprice_payment_id
 	payment, err := services.PaymentService.GetPayment(ctx, flexpricePaymentID)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get payment record, skipping event",
+		h.logger.Error(ctx, "failed to get payment record",
 			"error", err,
 			"flexprice_payment_id", flexpricePaymentID,
 			"payment_intent_id", paymentIntentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	if payment == nil {
@@ -287,12 +293,12 @@ func (h *Handler) handlePaymentIntentPaymentFailed(ctx context.Context, event *s
 
 	_, err = services.PaymentService.UpdatePayment(ctx, payment.ID, updateReq)
 	if err != nil {
-		h.logger.Error(ctx, "failed to update payment record for failed payment, skipping event",
+		h.logger.Error(ctx, "failed to update payment record for failed payment",
 			"error", err,
 			"payment_id", payment.ID,
 			"payment_intent_id", paymentIntentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully updated payment record for failed payment",
@@ -310,8 +316,8 @@ func (h *Handler) handleSetupIntentSucceeded(ctx context.Context, event *stripea
 	var setupIntent stripeapi.SetupIntent
 	err := json.Unmarshal(event.Data.Raw, &setupIntent)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse setup intent from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse setup intent from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "received setup_intent.succeeded webhook",
@@ -373,14 +379,14 @@ func (h *Handler) handleSetupIntentSucceeded(ctx context.Context, event *stripea
 
 	err = h.paymentSvc.SetDefaultPaymentMethod(ctx, customerID, paymentMethodID, services.CustomerService)
 	if err != nil {
-		h.logger.Error(ctx, "failed to set payment method as default, skipping event",
+		h.logger.Error(ctx, "failed to set payment method as default",
 			"error", err,
 			"error_type", fmt.Sprintf("%T", err),
 			"setup_intent_id", setupIntent.ID,
 			"customer_id", customerID,
 			"payment_method_id", paymentMethodID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully processed setup intent and set payment method as default",
@@ -409,11 +415,11 @@ func (h *Handler) handleInvoicePaymentPaid(ctx context.Context, event *stripeapi
 	// Check sync config first
 	conn, err := h.getConnection(ctx)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get connection for sync config check, skipping event",
+		h.logger.Error(ctx, "failed to get connection for sync config check",
 			"error", err,
 			"environment_id", environmentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	if !conn.IsInvoiceOutboundEnabled() {
@@ -427,10 +433,10 @@ func (h *Handler) handleInvoicePaymentPaid(ctx context.Context, event *stripeapi
 	// Parse it manually from the raw JSON since the invoice field is separate from id
 	var rawData map[string]interface{}
 	if err := json.Unmarshal(event.Data.Raw, &rawData); err != nil {
-		h.logger.Error(ctx, "failed to parse raw webhook data, skipping event",
+		h.logger.Error(ctx, "failed to parse raw webhook data",
 			"error", err,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	// Extract invoice ID (the actual invoice ID, not the invoice payment ID)
@@ -477,7 +483,7 @@ func (h *Handler) handleInvoicePaymentPaid(ctx context.Context, event *stripeapi
 		h.logger.Error(ctx, "failed to check if payment exists by gateway payment ID",
 			"error", err,
 			"payment_intent_id", paymentIntentID)
-		// Continue processing on error
+		return err
 	} else if exists {
 		h.logger.Info(ctx, "payment already exists for this payment intent, skipping",
 			"payment_intent_id", paymentIntentID,
@@ -488,11 +494,11 @@ func (h *Handler) handleInvoicePaymentPaid(ctx context.Context, event *stripeapi
 	// Get payment intent details from Stripe
 	paymentIntent, err := h.paymentSvc.GetPaymentIntent(ctx, paymentIntentID, environmentID)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get payment intent from Stripe, skipping event",
+		h.logger.Error(ctx, "failed to get payment intent from Stripe",
 			"error", err,
 			"payment_intent_id", paymentIntentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	// Process external Stripe payment
@@ -501,12 +507,12 @@ func (h *Handler) handleInvoicePaymentPaid(ctx context.Context, event *stripeapi
 		"stripe_invoice_id", stripeInvoiceID)
 
 	if err := h.paymentSvc.ProcessExternalStripePayment(ctx, paymentIntent, stripeInvoiceID, services.PaymentService, services.InvoiceService); err != nil {
-		h.logger.Error(ctx, "failed to process external Stripe payment, skipping event",
+		h.logger.Error(ctx, "failed to process external Stripe payment",
 			"error", err,
 			"payment_intent_id", paymentIntentID,
 			"stripe_invoice_id", stripeInvoiceID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully processed invoice.paid webhook",
@@ -520,11 +526,11 @@ func (h *Handler) handleProductCreated(ctx context.Context, event *stripeapi.Eve
 	// Check sync config first
 	conn, err := h.getConnection(ctx)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get connection for sync config check, skipping event",
+		h.logger.Error(ctx, "failed to get connection for sync config check",
 			"error", err,
 			"environment_id", environmentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	if !conn.IsPlanInboundEnabled() {
@@ -539,8 +545,8 @@ func (h *Handler) handleProductCreated(ctx context.Context, event *stripeapi.Eve
 	var product stripeapi.Product
 	err = json.Unmarshal(event.Data.Raw, &product)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse product from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse product from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "received product.created webhook",
@@ -555,8 +561,8 @@ func (h *Handler) handleProductCreated(ctx context.Context, event *stripeapi.Eve
 
 	plan, err := h.planSvc.CreatePlan(ctx, planID, services)
 	if err != nil {
-		h.logger.Error(ctx, "failed to create plan in FlexPrice, skipping event", "error", err, "product_id", product.ID, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to create plan in FlexPrice", "error", err, "product_id", product.ID, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully created plan in FlexPrice", "plan_id", plan)
@@ -569,11 +575,11 @@ func (h *Handler) handleProductUpdated(ctx context.Context, event *stripeapi.Eve
 	// Check sync config first
 	conn, err := h.getConnection(ctx)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get connection for sync config check, skipping event",
+		h.logger.Error(ctx, "failed to get connection for sync config check",
 			"error", err,
 			"environment_id", environmentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	if !conn.IsPlanInboundEnabled() {
@@ -588,8 +594,8 @@ func (h *Handler) handleProductUpdated(ctx context.Context, event *stripeapi.Eve
 	var product stripeapi.Product
 	err = json.Unmarshal(event.Data.Raw, &product)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse product from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse product from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "received product.updated webhook",
@@ -603,8 +609,8 @@ func (h *Handler) handleProductUpdated(ctx context.Context, event *stripeapi.Eve
 	planID := product.ID
 	plan, err := h.planSvc.UpdatePlan(ctx, planID, services)
 	if err != nil {
-		h.logger.Error(ctx, "failed to update plan in FlexPrice, skipping event", "error", err, "product_id", product.ID, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to update plan in FlexPrice", "error", err, "product_id", product.ID, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully updated plan in FlexPrice", "plan_id", plan.ID)
@@ -616,11 +622,11 @@ func (h *Handler) handleProductDeleted(ctx context.Context, event *stripeapi.Eve
 	// Check sync config first
 	conn, err := h.getConnection(ctx)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get connection for sync config check, skipping event",
+		h.logger.Error(ctx, "failed to get connection for sync config check",
 			"error", err,
 			"environment_id", environmentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	if !conn.IsPlanInboundEnabled() {
@@ -635,8 +641,8 @@ func (h *Handler) handleProductDeleted(ctx context.Context, event *stripeapi.Eve
 	var product stripeapi.Product
 	err = json.Unmarshal(event.Data.Raw, &product)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse product from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse product from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "received product.deleted webhook", "product_id", product.ID)
@@ -645,8 +651,8 @@ func (h *Handler) handleProductDeleted(ctx context.Context, event *stripeapi.Eve
 	planID := product.ID
 	err = h.planSvc.DeletePlan(ctx, planID, services)
 	if err != nil {
-		h.logger.Error(ctx, "failed to delete plan in FlexPrice, skipping event", "error", err, "product_id", product.ID, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to delete plan in FlexPrice", "error", err, "product_id", product.ID, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully deleted plan in FlexPrice", "plan_id", planID)
@@ -658,11 +664,11 @@ func (h *Handler) handleSubscriptionCreated(ctx context.Context, event *stripeap
 	// Check sync config first
 	conn, err := h.getConnection(ctx)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get connection for sync config check, skipping event",
+		h.logger.Error(ctx, "failed to get connection for sync config check",
 			"error", err,
 			"environment_id", environmentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	if !conn.IsSubscriptionInboundEnabled() {
@@ -677,8 +683,8 @@ func (h *Handler) handleSubscriptionCreated(ctx context.Context, event *stripeap
 	var subscription stripeapi.Subscription
 	err = json.Unmarshal(event.Data.Raw, &subscription)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse subscription from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse subscription from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "received customer.subscription.created webhook",
@@ -693,8 +699,8 @@ func (h *Handler) handleSubscriptionCreated(ctx context.Context, event *stripeap
 
 	sub, err := h.subSvc.CreateSubscription(ctx, subID, services)
 	if err != nil {
-		h.logger.Error(ctx, "failed to create subscription in FlexPrice, skipping event", "error", err, "subscription_id", subscription.ID, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to create subscription in FlexPrice", "error", err, "subscription_id", subscription.ID, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully created subscription in FlexPrice", "subscription_id", sub.ID)
@@ -707,11 +713,11 @@ func (h *Handler) handleSubscriptionUpdated(ctx context.Context, event *stripeap
 	// Check sync config first
 	conn, err := h.getConnection(ctx)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get connection for sync config check, skipping event",
+		h.logger.Error(ctx, "failed to get connection for sync config check",
 			"error", err,
 			"environment_id", environmentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	if !conn.IsSubscriptionInboundEnabled() {
@@ -726,8 +732,8 @@ func (h *Handler) handleSubscriptionUpdated(ctx context.Context, event *stripeap
 	var subscription stripeapi.Subscription
 	err = json.Unmarshal(event.Data.Raw, &subscription)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse subscription from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse subscription from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "received customer.subscription.updated webhook",
@@ -741,8 +747,8 @@ func (h *Handler) handleSubscriptionUpdated(ctx context.Context, event *stripeap
 	subscriptionID := subscription.ID
 	err = h.subSvc.UpdateSubscription(ctx, subscriptionID, services)
 	if err != nil {
-		h.logger.Error(ctx, "failed to update subscription in FlexPrice, skipping event", "error", err, "subscription_id", subscription.ID, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to update subscription in FlexPrice", "error", err, "subscription_id", subscription.ID, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully updated subscription in FlexPrice", "subscription_id", subscriptionID)
@@ -754,11 +760,11 @@ func (h *Handler) handleSubscriptionCancellation(ctx context.Context, event *str
 	// Check sync config first
 	conn, err := h.getConnection(ctx)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get connection for sync config check, skipping event",
+		h.logger.Error(ctx, "failed to get connection for sync config check",
 			"error", err,
 			"environment_id", environmentID,
 			"event_id", event.ID)
-		return nil
+		return err
 	}
 
 	if !conn.IsSubscriptionInboundEnabled() {
@@ -773,8 +779,8 @@ func (h *Handler) handleSubscriptionCancellation(ctx context.Context, event *str
 	var subscription stripeapi.Subscription
 	err = json.Unmarshal(event.Data.Raw, &subscription)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse subscription from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse subscription from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "received customer.subscription.deleted webhook", "subscription_id", subscription.ID)
@@ -783,8 +789,8 @@ func (h *Handler) handleSubscriptionCancellation(ctx context.Context, event *str
 	subID := subscription.ID
 	err = h.subSvc.CancelSubscription(ctx, subID, services)
 	if err != nil {
-		h.logger.Error(ctx, "failed to delete plan in FlexPrice, skipping event", "error", err, "subscription_id", subscription.ID, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to delete subscription in FlexPrice", "error", err, "subscription_id", subscription.ID, "event_id", event.ID)
+		return err
 	}
 
 	h.logger.Info(ctx, "successfully deleted subscription in FlexPrice", "subscription_id", subID)
@@ -792,13 +798,20 @@ func (h *Handler) handleSubscriptionCancellation(ctx context.Context, event *str
 	return nil
 }
 
-func (h *Handler) handleCheckoutSessionCompleted(ctx context.Context, event *stripeapi.Event, environmentID string, services *ServiceDependencies) error {
+func checkoutSessionPaymentSucceeded(session *stripeapi.CheckoutSession, paymentIntent *stripeapi.PaymentIntent) bool {
+	return session != nil &&
+		session.PaymentStatus == stripeapi.CheckoutSessionPaymentStatusPaid &&
+		paymentIntent != nil &&
+		paymentIntent.Status == stripeapi.PaymentIntentStatusSucceeded
+}
+
+func (h *Handler) handleCheckoutSessionSucceeded(ctx context.Context, event *stripeapi.Event, environmentID string, services *ServiceDependencies, async bool) error {
 	// Parse webhook to get checkout session data
 	var checkoutSession stripeapi.CheckoutSession
 	err := json.Unmarshal(event.Data.Raw, &checkoutSession)
 	if err != nil {
-		h.logger.Error(ctx, "failed to parse checkout session from webhook, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to parse checkout session from webhook", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	// get flexprice_payment_id from metadata
@@ -807,12 +820,26 @@ func (h *Handler) handleCheckoutSessionCompleted(ctx context.Context, event *str
 		h.logger.Info(ctx, "no flexprice_payment_id found in checkout session metadata", "event_id", event.ID)
 		return nil
 	}
+	// A completed Checkout Session can still be unpaid for delayed methods. Ack
+	// that event and wait for async_payment_succeeded rather than fulfilling it.
+	if checkoutSession.PaymentStatus != stripeapi.CheckoutSessionPaymentStatusPaid {
+		if async {
+			return ierr.NewError("Stripe reported async checkout success without paid status").
+				WithHint("Retry after Stripe marks the Checkout Session paid").
+				Mark(ierr.ErrSystem)
+		}
+		h.logger.Info(ctx, "checkout session completed before payment settled",
+			"checkout_session_id", checkoutSession.ID,
+			"payment_status", checkoutSession.PaymentStatus,
+			"event_id", event.ID)
+		return nil
+	}
 
 	// get payment from database
 	payment, err := services.PaymentService.GetPayment(ctx, flexpricePaymentID)
 	if err != nil {
-		h.logger.Error(ctx, "failed to get payment from database, skipping event", "error", err, "event_id", event.ID)
-		return nil
+		h.logger.Error(ctx, "failed to get payment from database", "error", err, "event_id", event.ID)
+		return err
 	}
 
 	// check if payment is already succeeded
@@ -821,29 +848,80 @@ func (h *Handler) handleCheckoutSessionCompleted(ctx context.Context, event *str
 		return nil
 	}
 
-	// Get payment intent if it exists
-	var paymentIntent *stripeapi.PaymentIntent
-	if checkoutSession.PaymentIntent != nil {
-		paymentIntentID := checkoutSession.PaymentIntent.ID
-		paymentIntent, err = h.paymentSvc.GetPaymentIntent(ctx, paymentIntentID, environmentID)
-		if err != nil {
-			h.logger.Error(ctx, "failed to fetch payment intent, continuing without it",
-				"error", err,
-				"payment_intent_id", paymentIntentID,
-				"event_id", event.ID)
-			paymentIntent = nil
-		}
+	if checkoutSession.PaymentIntent == nil || checkoutSession.PaymentIntent.ID == "" {
+		return ierr.NewError("paid Stripe checkout session has no payment intent").
+			WithHint("Retry after Stripe attaches the PaymentIntent").
+			Mark(ierr.ErrSystem)
+	}
+	paymentIntentID := checkoutSession.PaymentIntent.ID
+	paymentIntent, err := h.paymentSvc.GetPaymentIntent(ctx, paymentIntentID, environmentID)
+	if err != nil {
+		h.logger.Error(ctx, "failed to fetch checkout payment intent",
+			"error", err,
+			"payment_intent_id", paymentIntentID,
+			"event_id", event.ID)
+		return err
+	}
+	if !checkoutSessionPaymentSucceeded(&checkoutSession, paymentIntent) {
+		return ierr.NewError("Stripe checkout payment is not settled").
+			WithHint("Retry after the PaymentIntent succeeds").
+			WithReportableDetails(map[string]interface{}{
+				"checkout_session_id":   checkoutSession.ID,
+				"payment_intent_id":     paymentIntentID,
+				"payment_status":        checkoutSession.PaymentStatus,
+				"payment_intent_status": paymentIntent.Status,
+			}).
+			Mark(ierr.ErrSystem)
 	}
 
-	// Call HandleFlexPriceCheckoutPayment with optional payment intent
+	// Fulfillment is gated on both Stripe settlement signals.
 	err = h.paymentSvc.HandleFlexPriceCheckoutPayment(ctx, &checkoutSession, paymentIntent, payment, services.CustomerService, services.InvoiceService, services.PaymentService)
 	if err != nil {
-		h.logger.Error(ctx, "failed to handle FlexPrice checkout payment, skipping event",
+		h.logger.Error(ctx, "failed to handle FlexPrice checkout payment",
 			"error", err,
 			"flexprice_payment_id", flexpricePaymentID,
 			"event_id", event.ID)
+		return err
+	}
+
+	return nil
+}
+
+func (h *Handler) handleCheckoutSessionTerminalFailure(ctx context.Context, event *stripeapi.Event, services *ServiceDependencies, expired bool) error {
+	var checkoutSession stripeapi.CheckoutSession
+	if err := json.Unmarshal(event.Data.Raw, &checkoutSession); err != nil {
+		h.logger.Error(ctx, "failed to parse terminal checkout session webhook", "error", err, "event_id", event.ID)
+		return err
+	}
+
+	flexpricePaymentID := checkoutSession.Metadata["flexprice_payment_id"]
+	if flexpricePaymentID == "" {
+		h.logger.Info(ctx, "no flexprice_payment_id found in checkout session metadata", "event_id", event.ID)
+		return nil
+	}
+	payment, err := services.PaymentService.GetPayment(ctx, flexpricePaymentID)
+	if err != nil {
+		h.logger.Error(ctx, "failed to get payment for terminal checkout event", "error", err, "event_id", event.ID)
+		return err
+	}
+	if payment.PaymentStatus == types.PaymentStatusSucceeded || payment.PaymentStatus == types.PaymentStatusFailed {
 		return nil
 	}
 
+	paymentStatus := string(types.PaymentStatusFailed)
+	failedAt := time.Now()
+	errorMessage := "Asynchronous checkout payment failed"
+	if expired {
+		errorMessage = "Checkout session expired before payment"
+	}
+	_, err = services.PaymentService.UpdatePayment(ctx, payment.ID, dto.UpdatePaymentRequest{
+		PaymentStatus: &paymentStatus,
+		FailedAt:      &failedAt,
+		ErrorMessage:  &errorMessage,
+	})
+	if err != nil {
+		h.logger.Error(ctx, "failed to record terminal checkout event", "error", err, "payment_id", payment.ID, "event_id", event.ID)
+		return err
+	}
 	return nil
 }
