@@ -1117,11 +1117,21 @@ func TestAggregateMeteredEntitlements_ParallelEmitsBuckets(t *testing.T) {
 
 func TestAggregateMeteredEntitlements_AdditiveGrantConfig_NoBuckets(t *testing.T) {
 	// Additive grant entitlements merge into one bucket — no per-EC breakdown.
+	duration := 6
 	ents := []*entitlement.Entitlement{
 		{
 			ID: "e1", IsEnabled: true,
-			GrantMeasure: types.EntitlementGrantMeasureAmount,
-			GrantQuota:   lo.ToPtr(decimal.NewFromFloat(9.99)),
+			GrantMeasure:       types.EntitlementGrantMeasureQuantity,
+			GrantQuota:         lo.ToPtr(decimal.NewFromInt(10)),
+			GrantDurationValue: &duration,
+			GrantDurationUnit:  types.EntitlementGrantDurationUnitHour,
+		},
+		{
+			ID: "e2", IsEnabled: true,
+			GrantMeasure:       types.EntitlementGrantMeasureQuantity,
+			GrantQuota:         lo.ToPtr(decimal.NewFromInt(15)),
+			GrantDurationValue: &duration,
+			GrantDurationUnit:  types.EntitlementGrantDurationUnitHour,
 		},
 	}
 	agg := aggregateMeteredEntitlementsForBilling(ents)
@@ -1130,6 +1140,12 @@ func TestAggregateMeteredEntitlements_AdditiveGrantConfig_NoBuckets(t *testing.T
 	}
 	if agg.AggregationMode != types.EntitlementAggregationModeAdditive {
 		t.Fatalf("mode should be additive, got %s", agg.AggregationMode)
+	}
+	if agg.GrantMeasure != types.EntitlementGrantMeasureQuantity ||
+		agg.GrantQuota == nil || !agg.GrantQuota.Equal(decimal.NewFromInt(25)) ||
+		agg.GrantDurationValue == nil || *agg.GrantDurationValue != duration ||
+		agg.GrantDurationUnit != types.EntitlementGrantDurationUnitHour {
+		t.Fatalf("additive grant projection must carry the summed rolling allowance: %+v", agg)
 	}
 }
 

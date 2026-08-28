@@ -11,6 +11,7 @@ import (
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/samber/lo"
+	"github.com/shopspring/decimal"
 )
 
 // PaymentLifecycle maintains cross-system traceability for Flexprice-initiated payments.
@@ -158,7 +159,8 @@ func (l *PaymentLifecycle) ConfirmGatewayPayment(ctx context.Context, flexpriceP
 // RecordPaymentSuccess transitions the payment to SUCCEEDED and, for INVOICE
 // destination payments, reconciles the invoice. Called from the webhook handler.
 //
-// Idempotent: if the payment is already SUCCEEDED, logs and returns nil.
+// Idempotent: if the payment is already SUCCEEDED, skips the state transition but still
+// reconciles an invoice destination so a retry heals an earlier post-processing failure.
 func (l *PaymentLifecycle) RecordPaymentSuccess(ctx context.Context, params RecordPaymentSuccessParams) error {
 	l.logger.Info(ctx, "recording payment success",
 		"flexprice_payment_id", params.FlexpricePaymentID,
@@ -184,14 +186,13 @@ func (l *PaymentLifecycle) RecordPaymentSuccess(ctx context.Context, params Reco
 			Mark(ierr.ErrSystem)
 	}
 
-	if existing.PaymentStatus == types.PaymentStatusSucceeded {
-		l.logger.Info(ctx, "payment already succeeded, skipping",
+	alreadySucceeded := existing.PaymentStatus == types.PaymentStatusSucceeded
+	if alreadySucceeded {
+		l.logger.Info(ctx, "payment already succeeded, retrying destination reconciliation",
 			"flexprice_payment_id", params.FlexpricePaymentID,
 			"gateway_payment_id", params.GatewayPaymentID,
 		)
-		return nil
-	}
-	if existing.PaymentStatus.IsTerminal() {
+	} else if existing.PaymentStatus.IsTerminal() {
 		return ierr.NewError("payment is in a terminal state").
 			WithHint("Cannot transition to succeeded from current state").
 			WithReportableDetails(map[string]any{
@@ -202,43 +203,59 @@ func (l *PaymentLifecycle) RecordPaymentSuccess(ctx context.Context, params Reco
 			Mark(ierr.ErrValidation)
 	}
 
-	succeededAt := params.SucceededAt
-	if succeededAt.IsZero() {
-		succeededAt = time.Now().UTC()
-	}
+	if !alreadySucceeded {
+		succeededAt := params.SucceededAt
+		if succeededAt.IsZero() {
+			succeededAt = time.Now().UTC()
+		}
 
-	updateReq := apidto.UpdatePaymentRequest{
-		PaymentStatus:    lo.ToPtr(string(types.PaymentStatusSucceeded)),
-		GatewayPaymentID: lo.ToPtr(params.GatewayPaymentID),
-		SucceededAt:      lo.ToPtr(succeededAt),
-	}
+		updateReq := apidto.UpdatePaymentRequest{
+			PaymentStatus:    lo.ToPtr(string(types.PaymentStatusSucceeded)),
+			GatewayPaymentID: lo.ToPtr(params.GatewayPaymentID),
+			SucceededAt:      lo.ToPtr(succeededAt),
+		}
 
-	_, err = l.paymentService.UpdatePayment(ctx, params.FlexpricePaymentID, updateReq)
-	if err != nil {
-		l.logger.Error(ctx, "failed to update payment to succeeded",
+		_, err = l.paymentService.UpdatePayment(ctx, params.FlexpricePaymentID, updateReq)
+		if err != nil {
+			l.logger.Error(ctx, "failed to update payment to succeeded",
+				"flexprice_payment_id", params.FlexpricePaymentID,
+				"gateway_payment_id", params.GatewayPaymentID,
+				"error", err,
+			)
+			return ierr.WithError(err).
+				WithHint("Failed to record payment success").
+				WithReportableDetails(map[string]any{
+					"flexprice_payment_id": params.FlexpricePaymentID,
+					"gateway_payment_id":   params.GatewayPaymentID,
+				}).
+				Mark(ierr.ErrSystem)
+		}
+
+		l.logger.Info(ctx, "payment marked as succeeded",
 			"flexprice_payment_id", params.FlexpricePaymentID,
 			"gateway_payment_id", params.GatewayPaymentID,
-			"error", err,
+			"destination_type", existing.DestinationType,
+			"destination_id", existing.DestinationID,
 		)
-		return ierr.WithError(err).
-			WithHint("Failed to record payment success").
-			WithReportableDetails(map[string]any{
-				"flexprice_payment_id": params.FlexpricePaymentID,
-				"gateway_payment_id":   params.GatewayPaymentID,
-			}).
-			Mark(ierr.ErrSystem)
 	}
-
-	l.logger.Info(ctx, "payment marked as succeeded",
-		"flexprice_payment_id", params.FlexpricePaymentID,
-		"gateway_payment_id", params.GatewayPaymentID,
-		"destination_type", existing.DestinationType,
-		"destination_id", existing.DestinationID,
-	)
 
 	// For INVOICE destination, reconcile invoice payment status.
 	if existing.DestinationType == types.PaymentDestinationTypeInvoice {
 		invoiceID := existing.DestinationID
+
+		// ReconcilePaymentStatus ADDS the amount to the invoice, so a redelivered webhook for a
+		// payment that was already settled synchronously would double-count it. Healing only
+		// applies when the invoice genuinely still needs this payment.
+		if alreadySucceeded {
+			needed, err := l.invoiceNeedsReconciliation(ctx, params.FlexpricePaymentID, invoiceID, existing.Amount)
+			if err != nil {
+				return err
+			}
+			if !needed {
+				return nil
+			}
+		}
+
 		l.logger.Info(ctx, "reconciling invoice after payment success",
 			"flexprice_payment_id", params.FlexpricePaymentID,
 			"invoice_id", invoiceID,
@@ -268,6 +285,107 @@ func (l *PaymentLifecycle) RecordPaymentSuccess(ctx context.Context, params Reco
 	}
 
 	return nil
+}
+
+// invoiceNeedsReconciliation reports whether an already-succeeded payment's invoice still has to
+// be reconciled. ReconcilePaymentStatus ADDS to amount_paid, so healing must run only for an
+// invoice that is genuinely short: a settled (SUCCEEDED/OVERPAID) or fully covered invoice is
+// skipped, and so is one whose recorded amount_paid already accounts for this payment.
+func (l *PaymentLifecycle) invoiceNeedsReconciliation(ctx context.Context, flexpricePaymentID, invoiceID string, amount decimal.Decimal) (bool, error) {
+	// Read through the list path, not GetInvoice: GetInvoice expands subscription, customer and
+	// taxes, and dereferences SubscriptionID. This guard needs only the money columns.
+	filter := types.NewNoLimitInvoiceFilter()
+	filter.InvoiceIDs = []string{invoiceID}
+	list, err := l.invoiceService.ListInvoices(ctx, filter)
+	if err != nil {
+		l.logger.Error(ctx, "failed to load invoice before healing reconciliation",
+			"flexprice_payment_id", flexpricePaymentID,
+			"invoice_id", invoiceID,
+			"error", err,
+		)
+		return false, ierr.WithError(err).
+			WithHint("Failed to load invoice for reconciliation").
+			WithReportableDetails(map[string]any{
+				"flexprice_payment_id": flexpricePaymentID,
+				"invoice_id":           invoiceID,
+			}).
+			Mark(ierr.ErrSystem)
+	}
+	if len(list.Items) == 0 {
+		return false, ierr.NewError("invoice not found for reconciliation").
+			WithHint("Cannot reconcile a payment whose invoice is missing").
+			WithReportableDetails(map[string]any{
+				"flexprice_payment_id": flexpricePaymentID,
+				"invoice_id":           invoiceID,
+			}).
+			Mark(ierr.ErrNotFound)
+	}
+	inv := list.Items[0]
+
+	settled := inv.PaymentStatus == types.PaymentStatusSucceeded || inv.PaymentStatus == types.PaymentStatusOverpaid
+	if settled || !inv.AmountRemaining.GreaterThan(decimal.Zero) {
+		l.logger.Info(ctx, "invoice already settled, skipping healing reconciliation",
+			"flexprice_payment_id", flexpricePaymentID,
+			"invoice_id", invoiceID,
+			"invoice_payment_status", inv.PaymentStatus,
+			"amount_due", inv.AmountDue.String(),
+			"amount_paid", inv.AmountPaid.String(),
+			"amount_remaining", inv.AmountRemaining.String(),
+		)
+		return false, nil
+	}
+
+	// The invoice is short overall, but that shortfall may belong to a different unpaid payment.
+	// Only heal when amount_paid is behind the sum of succeeded payments by at least this amount.
+	succeededTotal, err := l.succeededPaymentsTotal(ctx, invoiceID)
+	if err != nil {
+		l.logger.Error(ctx, "failed to total succeeded payments before healing reconciliation",
+			"flexprice_payment_id", flexpricePaymentID,
+			"invoice_id", invoiceID,
+			"error", err,
+		)
+		return false, ierr.WithError(err).
+			WithHint("Failed to verify invoice payments before reconciliation").
+			WithReportableDetails(map[string]any{
+				"flexprice_payment_id": flexpricePaymentID,
+				"invoice_id":           invoiceID,
+			}).
+			Mark(ierr.ErrSystem)
+	}
+
+	if inv.AmountPaid.Add(amount).GreaterThan(succeededTotal) {
+		l.logger.Info(ctx, "payment already reflected on invoice, skipping healing reconciliation",
+			"flexprice_payment_id", flexpricePaymentID,
+			"invoice_id", invoiceID,
+			"amount", amount.String(),
+			"amount_paid", inv.AmountPaid.String(),
+			"succeeded_payments_total", succeededTotal.String(),
+		)
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// succeededPaymentsTotal sums every succeeded payment recorded against an invoice.
+func (l *PaymentLifecycle) succeededPaymentsTotal(ctx context.Context, invoiceID string) (decimal.Decimal, error) {
+	filter := types.NewNoLimitPaymentFilter()
+	filter.DestinationType = lo.ToPtr(string(types.PaymentDestinationTypeInvoice))
+	filter.DestinationID = lo.ToPtr(invoiceID)
+	filter.PaymentStatus = lo.ToPtr(string(types.PaymentStatusSucceeded))
+
+	payments, err := l.paymentService.ListPayments(ctx, filter)
+	if err != nil {
+		return decimal.Zero, err
+	}
+
+	total := decimal.Zero
+	if payments != nil {
+		for _, p := range payments.Items {
+			total = total.Add(p.Amount)
+		}
+	}
+	return total, nil
 }
 
 // RecordPaymentFailure transitions the payment to FAILED. Called from the

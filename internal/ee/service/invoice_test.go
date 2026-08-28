@@ -1107,7 +1107,7 @@ func (s *InvoiceServiceSuite) TestUpdatePaymentStatusWithPayments() {
 		shouldUpdateStatus   bool
 	}{
 		{
-			name: "should return error when invoice has active payment records",
+			name: "repairs overpaid invoice when succeeded payments exactly cover amount due",
 			setupPayment: func() string {
 				// Create a payment record for the test invoice
 				paymentService := NewPaymentService(ServiceParams{
@@ -1149,13 +1149,22 @@ func (s *InvoiceServiceSuite) TestUpdatePaymentStatusWithPayments() {
 				s.NoError(err)
 				s.T().Logf("Created payment: %s for invoice: %s", payment.ID, testInvoice.ID)
 
+				// Production regression: a duplicate success reconciliation added the single
+				// payment twice, leaving the invoice OVERPAID. An operator must be able to
+				// normalize it from the payment-backed API without deleting payment evidence.
+				overpaid, getErr := s.invoiceRepo.Get(s.GetContext(), testInvoice.ID)
+				s.NoError(getErr)
+				overpaid.PaymentStatus = types.PaymentStatusOverpaid
+				overpaid.AmountPaid = overpaid.AmountDue.Mul(decimal.NewFromInt(2))
+				overpaid.AmountRemaining = decimal.Zero
+				s.NoError(s.invoiceRepo.Update(s.GetContext(), overpaid))
+
 				return testInvoice.ID
 			},
-			newPaymentStatus:     types.PaymentStatusSucceeded,
-			newAmount:            lo.ToPtr(decimal.NewFromFloat(100)),
-			wantErr:              true,
-			expectedErrorMessage: "invoice has active payment records",
-			shouldUpdateStatus:   false,
+			newPaymentStatus:   types.PaymentStatusSucceeded,
+			newAmount:          lo.ToPtr(decimal.NewFromFloat(100)),
+			wantErr:            false,
+			shouldUpdateStatus: true,
 		},
 		{
 			name: "should successfully update payment status when no payments exist",

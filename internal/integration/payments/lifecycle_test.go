@@ -17,7 +17,7 @@ import (
 type PaymentLifecycleSuite struct {
 	testutil.BaseServiceTestSuite
 	lifecycle *payments.PaymentLifecycle
-	testData struct {
+	testData  struct {
 		customer *customer.Customer
 		invoice  *invoice.Invoice
 	}
@@ -456,4 +456,106 @@ func (s *PaymentLifecycleSuite) TestFullLifecycle_Invoice() {
 	payment, err = s.GetStores().PaymentRepo.Get(ctx, id)
 	s.NoError(err)
 	s.Equal(types.PaymentStatusSucceeded, payment.PaymentStatus)
+}
+
+// A webhook retry must heal the invoice even when the payment row already reached SUCCEEDED
+// before an earlier reconciliation failure.
+func (s *PaymentLifecycleSuite) TestRecordPaymentSuccess_AlreadySucceededHealsInvoice() {
+	ctx := s.GetContext()
+	id, err := s.lifecycle.InitiatePayment(ctx, s.invoiceParams())
+	s.NoError(err)
+	s.NoError(s.lifecycle.ConfirmGatewayPayment(ctx, id, "gw_inv_heal"))
+
+	params := payments.RecordPaymentSuccessParams{
+		FlexpricePaymentID: id,
+		GatewayPaymentID:   "gw_inv_heal",
+		SucceededAt:        time.Now().UTC(),
+	}
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+
+	// Model a failed/lost post-processing write after the payment itself was persisted.
+	inv, err := s.GetStores().InvoiceRepo.Get(ctx, s.testData.invoice.ID)
+	s.NoError(err)
+	inv.PaymentStatus = types.PaymentStatusPending
+	inv.AmountPaid = decimal.Zero
+	inv.AmountRemaining = inv.AmountDue
+	inv.PaidAt = nil
+	s.NoError(s.GetStores().InvoiceRepo.Update(ctx, inv))
+
+	payment, err := s.GetStores().PaymentRepo.Get(ctx, id)
+	s.NoError(err)
+	s.Equal(types.PaymentStatusSucceeded, payment.PaymentStatus)
+
+	// The idempotent webhook delivery skips the payment transition but repeats reconciliation.
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+
+	healed, err := s.GetStores().InvoiceRepo.Get(ctx, s.testData.invoice.ID)
+	s.NoError(err)
+	s.Equal(types.PaymentStatusSucceeded, healed.PaymentStatus)
+	s.True(healed.AmountRemaining.IsZero())
+	s.True(healed.AmountPaid.Equal(decimal.NewFromInt(100)))
+}
+
+// Production regression: a customer paid once, the synchronous path settled the invoice, then the
+// gateway webhook redelivered the same payment. Healing must not add the amount a second time.
+func (s *PaymentLifecycleSuite) TestRecordPaymentSuccess_WebhookRetryAfterSyncSuccessDoesNotOverpay() {
+	ctx := s.GetContext()
+	id, err := s.lifecycle.InitiatePayment(ctx, s.invoiceParams())
+	s.NoError(err)
+	s.NoError(s.lifecycle.ConfirmGatewayPayment(ctx, id, "gw_inv_once"))
+
+	params := payments.RecordPaymentSuccessParams{
+		FlexpricePaymentID: id,
+		GatewayPaymentID:   "gw_inv_once",
+		SucceededAt:        time.Now().UTC(),
+	}
+
+	// First delivery settles the invoice exactly once.
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+
+	settled, err := s.GetStores().InvoiceRepo.Get(ctx, s.testData.invoice.ID)
+	s.NoError(err)
+	s.True(settled.AmountPaid.Equal(settled.AmountDue))
+
+	// Redelivery of the same charge must be a no-op, not a second application.
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+
+	final, err := s.GetStores().InvoiceRepo.Get(ctx, s.testData.invoice.ID)
+	s.NoError(err)
+	s.Equal(types.PaymentStatusSucceeded, final.PaymentStatus)
+	s.True(final.AmountPaid.Equal(final.AmountDue), "amount_paid must stay at the single charge")
+	s.True(final.AmountRemaining.IsZero())
+}
+
+// An invoice that is still short overall, but whose shortfall does not belong to this payment,
+// must not absorb this payment's amount twice.
+func (s *PaymentLifecycleSuite) TestRecordPaymentSuccess_AlreadyCountedPaymentIsNotReapplied() {
+	ctx := s.GetContext()
+	id, err := s.lifecycle.InitiatePayment(ctx, s.invoiceParams())
+	s.NoError(err)
+	s.NoError(s.lifecycle.ConfirmGatewayPayment(ctx, id, "gw_inv_partial"))
+
+	params := payments.RecordPaymentSuccessParams{
+		FlexpricePaymentID: id,
+		GatewayPaymentID:   "gw_inv_partial",
+		SucceededAt:        time.Now().UTC(),
+	}
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+
+	// Model an invoice whose due amount grew after this payment was applied: it is short, but
+	// this payment is already reflected in amount_paid.
+	inv, err := s.GetStores().InvoiceRepo.Get(ctx, s.testData.invoice.ID)
+	s.NoError(err)
+	inv.AmountDue = decimal.NewFromInt(150)
+	inv.PaymentStatus = types.PaymentStatusPending
+	inv.AmountRemaining = inv.AmountDue.Sub(inv.AmountPaid)
+	s.NoError(s.GetStores().InvoiceRepo.Update(ctx, inv))
+
+	s.NoError(s.lifecycle.RecordPaymentSuccess(ctx, params))
+
+	final, err := s.GetStores().InvoiceRepo.Get(ctx, s.testData.invoice.ID)
+	s.NoError(err)
+	s.True(final.AmountPaid.Equal(decimal.NewFromInt(100)), "the already-counted payment must not be added again")
+	s.Equal(types.PaymentStatusPending, final.PaymentStatus)
 }

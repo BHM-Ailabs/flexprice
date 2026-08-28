@@ -56,10 +56,17 @@ type AggregatedEntitlement struct {
 	UsageLimit       *int64                            `json:"usage_limit,omitempty"`
 	IsSoftLimit      bool                              `json:"is_soft_limit"`
 	UsageResetPeriod types.EntitlementUsageResetPeriod `json:"usage_reset_period,omitempty"`
-	StaticValues     []string                          `json:"static_values,omitempty"`
-	ConfigValues     []map[string]any                  `json:"config_values,omitempty"`
-	AggregationMode  types.EntitlementAggregationMode  `json:"aggregation_mode,omitempty"`
-	Buckets          []*AggregatedEntitlementBucket    `json:"buckets,omitempty"`
+	// Additive grant fields describe the single merged rolling allowance. For
+	// parallel aggregation these remain empty and Buckets carries each
+	// independent allowance instead.
+	GrantMeasure       types.EntitlementGrantMeasure      `json:"grant_measure,omitempty"`
+	GrantQuota         *decimal.Decimal                   `json:"grant_quota,omitempty" swaggertype:"string"`
+	GrantDurationValue *int                               `json:"grant_duration_value,omitempty"`
+	GrantDurationUnit  types.EntitlementGrantDurationUnit `json:"grant_duration_unit,omitempty"`
+	StaticValues       []string                           `json:"static_values,omitempty"`
+	ConfigValues       []map[string]any                   `json:"config_values,omitempty"`
+	AggregationMode    types.EntitlementAggregationMode   `json:"aggregation_mode,omitempty"`
+	Buckets            []*AggregatedEntitlementBucket     `json:"buckets,omitempty"`
 }
 
 // AggregatedEntitlementBucket is one independent budget within a parallel feature.

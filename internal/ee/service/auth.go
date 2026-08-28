@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
 	authProvider "github.com/flexprice/flexprice/internal/auth"
@@ -14,6 +15,7 @@ import (
 type AuthService interface {
 	SignUp(ctx context.Context, req *dto.SignUpRequest) (*dto.AuthResponse, error)
 	Login(ctx context.Context, req *dto.LoginRequest) (*dto.AuthResponse, error)
+	ExchangePlaqadCode(ctx context.Context, req *dto.PlaqadCallbackRequest) (*dto.PlaqadCallbackResponse, error)
 }
 
 type authService struct {
@@ -35,6 +37,11 @@ func NewAuthService(
 
 // SignUp creates a new user and returns an auth token
 func (s *authService) SignUp(ctx context.Context, req *dto.SignUpRequest) (*dto.AuthResponse, error) {
+	if s.Config.Auth.Plaqad.Enabled {
+		return nil, ierr.NewError("native signup is disabled").
+			WithHint("Sign in with Plaqad Auth").
+			Mark(ierr.ErrPermissionDenied)
+	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -119,6 +126,11 @@ func (s *authService) SignUp(ctx context.Context, req *dto.SignUpRequest) (*dto.
 
 // Login authenticates a user and returns an auth token
 func (s *authService) Login(ctx context.Context, req *dto.LoginRequest) (*dto.AuthResponse, error) {
+	if s.Config.Auth.Plaqad.Enabled {
+		return nil, ierr.NewError("native login is disabled").
+			WithHint("Sign in with Plaqad Auth").
+			Mark(ierr.ErrPermissionDenied)
+	}
 	user, err := s.UserRepo.GetByEmail(ctx, req.Email)
 	if err != nil {
 		// Only normalize the not-found case: an unknown email must return the
@@ -171,4 +183,27 @@ func (s *authService) Login(ctx context.Context, req *dto.LoginRequest) (*dto.Au
 	}
 
 	return response, nil
+}
+
+func (s *authService) ExchangePlaqadCode(ctx context.Context, req *dto.PlaqadCallbackRequest) (*dto.PlaqadCallbackResponse, error) {
+	result, err := authProvider.ExchangePlaqadCode(ctx, s.Config.Auth.Plaqad, req.Code, req.CodeVerifier)
+	if err != nil {
+		if errors.Is(err, authProvider.ErrPlaqadUnauthorized) {
+			return nil, ierr.WithError(err).
+				WithHint("The Plaqad authorization code is invalid or expired").
+				Mark(ierr.ErrPermissionDenied)
+		}
+		return nil, ierr.WithError(err).
+			WithHint("Plaqad authorization is temporarily unavailable").
+			Mark(ierr.ErrSystem)
+	}
+	return &dto.PlaqadCallbackResponse{
+		Token:     result.Token,
+		ExpiresAt: result.ExpiresAt,
+		User: dto.PlaqadTokenUser{
+			ID:    result.User.ID,
+			Email: result.User.Email,
+			Name:  result.User.Name,
+		},
+	}, nil
 }

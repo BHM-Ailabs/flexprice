@@ -7,8 +7,10 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/subscription"
 	"github.com/flexprice/flexprice/internal/domain/wallet"
 	ierr "github.com/flexprice/flexprice/internal/errors"
+	"github.com/flexprice/flexprice/internal/integration/paystack"
 	"github.com/flexprice/flexprice/internal/types"
 
+	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
 
@@ -429,7 +431,7 @@ func (s *subscriptionPaymentProcessor) processPayment(
 			"card_amount", cardAmount,
 		)
 
-		cardAmountPaid := s.processPaymentMethodCharge(ctx, sub, inv, cardAmount)
+		cardAmountPaid, stopFallback := s.processPaymentMethodCharge(ctx, sub, inv, cardAmount)
 		if cardAmountPaid.GreaterThan(decimal.Zero) {
 			result.AmountPaid = result.AmountPaid.Add(cardAmountPaid)
 			result.RemainingAmount = result.RemainingAmount.Sub(cardAmountPaid)
@@ -443,6 +445,19 @@ func (s *subscriptionPaymentProcessor) processPayment(
 				"card_amount_paid", cardAmountPaid,
 				"remaining_amount", result.RemainingAmount,
 			)
+		} else if stopFallback {
+			// The gateway outcome is unknown: the customer may already have been debited, so no
+			// wallet or other payment method may be used. The invoice stays unpaid until the
+			// gateway webhook or a reconciliation sweep settles the charge.
+			s.Logger.Error(ctx, "card charge outcome unknown, skipping wallet fallback",
+				"subscription_id", sub.ID,
+				"invoice_id", inv.ID,
+				"attempted_card_amount", cardAmount,
+				"wallet_amount_available", walletAmount,
+			)
+
+			result.Success = false
+			return result
 		} else {
 			// Card payment failed - check if we should allow partial wallet payment
 			allowPartialWallet := s.shouldAllowPartialWalletPayment(
@@ -698,57 +713,100 @@ func (s *subscriptionPaymentProcessor) calculateWalletAllowedAmount(
 	return allowedAmount
 }
 
-// processPaymentMethodCharge processes payment using payment method (card, etc.)
+// classifyCardChargeOutcome maps a card-charge error onto its money semantics.
+//   - collected but not persisted: the gateway has the money, so count it as paid and make sure
+//     nothing else is charged for the same invoice.
+//   - outcome unknown: nothing may be counted, and no other payment method may be tried either,
+//     because the card may still end up debited.
+//   - anything else is a plain decline: classified is false and the caller keeps today's
+//     handling (wallet fallback, dunning).
+func classifyCardChargeOutcome(err error) (countAsPaid bool, stopFallback bool, classified bool) {
+	switch {
+	case paystack.IsChargeCollected(err):
+		return true, true, true
+	case paystack.IsChargeOutcomeUnknown(err):
+		return false, true, true
+	default:
+		return false, false, false
+	}
+}
+
+// processPaymentMethodCharge processes payment using payment method (card, etc.). It returns the
+// amount actually collected and, when nothing was collected, whether the caller must still skip
+// every fallback: an unknown provider outcome may already have debited the customer.
 func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 	ctx context.Context,
 	sub *subscription.Subscription,
 	inv *dto.InvoiceResponse,
 	amount decimal.Decimal,
-) decimal.Decimal {
+) (decimal.Decimal, bool) {
 	s.Logger.Info(ctx, "processing payment method charge",
 		"subscription_id", sub.ID,
 		"invoice_id", inv.ID,
 		"amount", amount,
 	)
 
-	// Check if tenant has Stripe connection
-	if !s.hasStripeConnection(ctx) {
-		s.Logger.Info(context.Background(), "no Stripe connection available for payment method charge",
-			"subscription_id", sub.ID,
-		)
-		return decimal.Zero
-	}
-
-	// Get Stripe integration
-	stripeIntegration, err := s.IntegrationFactory.GetStripeIntegration(ctx)
-	if err != nil {
-		s.Logger.Info(context.Background(), "failed to get Stripe integration",
-			"subscription_id", sub.ID,
-			"error", err,
-		)
-		return decimal.Zero
-	}
-
-	// Check if customer has Stripe entity mapping
-	// Use invoicing customer ID for Stripe operations - payment should use invoicing customer's payment methods
+	// Pick the gateway that can charge a saved payment method for this subscription. Paystack
+	// keeps a reusable card authorization on the subscription itself; Stripe resolves a payment
+	// method from the subscription or the invoicing customer's default.
 	invoicingCustomerID := sub.GetInvoicingCustomerID()
-	customerService := NewCustomerService(*s.ServiceParams)
-	if !stripeIntegration.CustomerSvc.HasCustomerStripeMapping(ctx, invoicingCustomerID, customerService) {
-		s.Logger.Info(context.Background(), "no Stripe entity mapping found for invoicing customer",
-			"subscription_id", sub.ID,
-			"subscription_customer_id", sub.CustomerID,
-			"invoicing_customer_id", invoicingCustomerID,
-		)
-		return decimal.Zero
-	}
+	var paymentGateway *types.PaymentGatewayType
+	var paymentMethodID string
 
-	// Get payment method ID - use invoicing customer's payment methods
-	paymentMethodID := s.getPaymentMethodID(ctx, sub, invoicingCustomerID)
-	if paymentMethodID == "" {
-		s.Logger.Info(context.Background(), "no payment method available for automatic charging",
+	if authorizationCode := lo.FromPtr(sub.GatewayPaymentMethodID); paystack.IsAuthorizationCode(authorizationCode) {
+		// A Paystack authorization is meaningless to Stripe, so never fall through to it.
+		if !s.hasPaystackConnection(ctx) {
+			s.Logger.Info(ctx, "subscription has a saved Paystack card but no Paystack connection",
+				"subscription_id", sub.ID,
+				"payment_method_id", paystack.MaskAuthorizationCode(authorizationCode),
+			)
+			return decimal.Zero, false
+		}
+
+		s.Logger.Info(ctx, "using saved Paystack authorization for automatic charging",
 			"subscription_id", sub.ID,
 		)
-		return decimal.Zero
+		paymentGateway = lo.ToPtr(types.PaymentGatewayTypePaystack)
+		paymentMethodID = authorizationCode
+	} else {
+		// Check if tenant has Stripe connection
+		if !s.hasStripeConnection(ctx) {
+			s.Logger.Info(context.Background(), "no Stripe connection available for payment method charge",
+				"subscription_id", sub.ID,
+			)
+			return decimal.Zero, false
+		}
+
+		// Get Stripe integration
+		stripeIntegration, err := s.IntegrationFactory.GetStripeIntegration(ctx)
+		if err != nil {
+			s.Logger.Info(context.Background(), "failed to get Stripe integration",
+				"subscription_id", sub.ID,
+				"error", err,
+			)
+			return decimal.Zero, false
+		}
+
+		// Check if customer has Stripe entity mapping
+		// Use invoicing customer ID for Stripe operations - payment should use invoicing customer's payment methods
+		customerService := NewCustomerService(*s.ServiceParams)
+		if !stripeIntegration.CustomerSvc.HasCustomerStripeMapping(ctx, invoicingCustomerID, customerService) {
+			s.Logger.Info(context.Background(), "no Stripe entity mapping found for invoicing customer",
+				"subscription_id", sub.ID,
+				"subscription_customer_id", sub.CustomerID,
+				"invoicing_customer_id", invoicingCustomerID,
+			)
+			return decimal.Zero, false
+		}
+
+		// Get payment method ID - use invoicing customer's payment methods
+		paymentMethodID = s.getPaymentMethodID(ctx, sub, invoicingCustomerID)
+		if paymentMethodID == "" {
+			s.Logger.Info(context.Background(), "no payment method available for automatic charging",
+				"subscription_id", sub.ID,
+			)
+			return decimal.Zero, false
+		}
 	}
 
 	// Create payment record for card payment
@@ -758,6 +816,7 @@ func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 		DestinationID:     inv.ID,
 		PaymentMethodType: types.PaymentMethodTypeCard,
 		PaymentMethodID:   paymentMethodID,
+		PaymentGateway:    paymentGateway,
 		Amount:            amount,
 		Currency:          inv.Currency,
 		ProcessPayment:    true,
@@ -771,15 +830,29 @@ func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 
 	paymentResp, err := paymentService.CreatePayment(ctx, paymentReq)
 	if err != nil {
+		if countAsPaid, stopFallback, classified := classifyCardChargeOutcome(err); classified {
+			s.Logger.Error(ctx, "card charge left money in an unresolved state",
+				"error", err,
+				"subscription_id", sub.ID,
+				"invoice_id", inv.ID,
+				"amount", amount,
+				"counted_as_paid", countAsPaid,
+			)
+			if countAsPaid {
+				return amount, stopFallback
+			}
+			return decimal.Zero, stopFallback
+		}
+
 		s.Logger.Error(ctx, "failed to create payment record for card charge",
 			"error", err,
 			"subscription_id", sub.ID,
 			"subscription_customer_id", sub.CustomerID,
 			"invoicing_customer_id", invoicingCustomerID,
-			"payment_method_id", paymentMethodID,
+			"payment_method_id", paystack.MaskAuthorizationCode(paymentMethodID),
 			"amount", amount,
 		)
-		return decimal.Zero
+		return decimal.Zero, false
 	}
 
 	s.Logger.Info(ctx, "created payment record for card charge",
@@ -795,7 +868,18 @@ func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 			"payment_id", paymentResp.ID,
 			"amount", amount,
 		)
-		return amount
+		return amount, false
+	}
+
+	// PROCESSING means the gateway leg is still in flight (unknown outcome preserved by the
+	// payment processor): stop here rather than stacking another payment method on top.
+	if paymentResp.PaymentStatus == types.PaymentStatusProcessing {
+		s.Logger.Error(ctx, "card charge is still processing, no fallback will be attempted",
+			"subscription_id", sub.ID,
+			"payment_id", paymentResp.ID,
+			"amount", amount,
+		)
+		return decimal.Zero, true
 	}
 
 	s.Logger.Info(context.Background(), "payment method charge not successful",
@@ -803,7 +887,7 @@ func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 		"payment_id", paymentResp.ID,
 		"status", paymentResp.PaymentStatus,
 	)
-	return decimal.Zero
+	return decimal.Zero, false
 }
 
 // getPaymentMethodID gets the payment method ID for the subscription
@@ -813,7 +897,7 @@ func (s *subscriptionPaymentProcessor) getPaymentMethodID(ctx context.Context, s
 	if sub.GatewayPaymentMethodID != nil && *sub.GatewayPaymentMethodID != "" {
 		s.Logger.Info(ctx, "using subscription gateway payment method",
 			"subscription_id", sub.ID,
-			"gateway_payment_method_id", *sub.GatewayPaymentMethodID,
+			"gateway_payment_method_id", paystack.MaskAuthorizationCode(*sub.GatewayPaymentMethodID),
 		)
 		return *sub.GatewayPaymentMethodID
 	}
@@ -878,6 +962,24 @@ func (s *subscriptionPaymentProcessor) hasStripeConnection(ctx context.Context) 
 		"connection_id", conn.ID,
 		"provider", conn.ProviderType,
 	)
+
+	return true
+}
+
+// hasPaystackConnection checks if the tenant has a Paystack connection available
+func (s *subscriptionPaymentProcessor) hasPaystackConnection(ctx context.Context) bool {
+	conn, err := s.ConnectionRepo.GetByProvider(ctx, types.SecretProviderPaystack)
+	if err != nil {
+		s.Logger.Debug(ctx, "no Paystack connection found",
+			"error", err,
+		)
+		return false
+	}
+
+	if conn == nil {
+		s.Logger.Debug(ctx, "Paystack connection is nil")
+		return false
+	}
 
 	return true
 }

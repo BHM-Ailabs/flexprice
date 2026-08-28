@@ -6,9 +6,9 @@ import (
 
 	"github.com/flexprice/flexprice/internal/api/dto"
 	"github.com/flexprice/flexprice/internal/config"
+	"github.com/flexprice/flexprice/internal/ee/service"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/logger"
-	"github.com/flexprice/flexprice/internal/ee/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -70,6 +70,25 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	authResponse, err := h.authService.Login(c.Request.Context(), &req)
 	if err != nil {
 		h.logger.Error(c.Request.Context(), "failed to login", "error", err)
+		c.Error(err)
+		return
+	}
+
+	c.JSON(http.StatusOK, authResponse)
+}
+
+func (h *AuthHandler) PlaqadCallback(c *gin.Context) {
+	var req dto.PlaqadCallbackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(ierr.WithError(err).
+			WithHint("code and code_verifier are required").
+			Mark(ierr.ErrValidation))
+		return
+	}
+
+	authResponse, err := h.authService.ExchangePlaqadCode(c.Request.Context(), &req)
+	if err != nil {
+		h.logger.Error(c.Request.Context(), "failed to exchange Plaqad authorization code", "error", err)
 		c.Error(err)
 		return
 	}

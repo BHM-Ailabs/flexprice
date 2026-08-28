@@ -140,7 +140,9 @@ func (p *paymentProcessor) ProcessPayment(ctx context.Context, id string) (*paym
 	if paymentObj.TrackAttempts && attempt != nil {
 		if processErr != nil {
 			// For payment links, keep attempt as pending even on error
-			if paymentObj.PaymentMethodType == types.PaymentMethodTypePaymentLink {
+			// An unresolved gateway outcome is not a failed attempt either: the charge may still
+			// land, so the attempt stays pending for the webhook/reconciliation to close.
+			if paymentObj.PaymentMethodType == types.PaymentMethodTypePaymentLink || isUnresolvedGatewayOutcome(processErr) {
 				attempt.PaymentStatus = types.PaymentStatusPending
 				attempt.ErrorMessage = lo.ToPtr(processErr.Error())
 			} else {
@@ -176,6 +178,16 @@ func (p *paymentProcessor) ProcessPayment(ctx context.Context, id string) (*paym
 				paymentObj.PaymentStatus = types.PaymentStatusInitiated
 			}
 			// Don't set failed_at or error_message for payment links
+		} else if isUnresolvedGatewayOutcome(processErr) {
+			// The gateway may already have collected the money. Marking this FAILED would invite
+			// a second collection attempt, so the payment stays PROCESSING (and no payment.failed
+			// webhook fires) until the gateway webhook or a reconciliation sweep resolves it.
+			p.Logger.Error(ctx, "keeping payment as processing: gateway charge outcome unresolved",
+				"payment_id", paymentObj.ID,
+				"status", paymentObj.PaymentStatus,
+				"error", processErr.Error())
+			paymentObj.PaymentStatus = types.PaymentStatusProcessing
+			paymentObj.ErrorMessage = lo.ToPtr(processErr.Error())
 		} else {
 			// For other cases, mark as failed
 			paymentObj.PaymentStatus = types.PaymentStatusFailed
@@ -203,6 +215,9 @@ func (p *paymentProcessor) ProcessPayment(ctx context.Context, id string) (*paym
 
 	paymentObj.UpdatedAt = time.Now().UTC()
 	if err := p.PaymentRepo.Update(ctx, paymentObj); err != nil {
+		if isKnownPaystackCollection(paymentObj) {
+			return paymentObj, paystack.NewChargeCollectedError(paystackCollectionReference(paymentObj), err)
+		}
 		return paymentObj, err
 	}
 
@@ -210,7 +225,13 @@ func (p *paymentProcessor) ProcessPayment(ctx context.Context, id string) (*paym
 	if paymentObj.PaymentStatus == types.PaymentStatusSucceeded {
 		if err := p.handlePostProcessing(ctx, paymentObj); err != nil {
 			p.Logger.Error(ctx, "failed to handle post-processing", "error", err, "payment_id", paymentObj.ID)
-			// Note: We don't return this error as the payment itself was successful
+			if isKnownPaystackCollection(paymentObj) {
+				// Paystack has the money and the payment row is succeeded; surface a typed
+				// collected outcome so no wallet fallback runs. The idempotent Paystack webhook
+				// retries invoice reconciliation even when the payment already succeeded.
+				return paymentObj, paystack.NewChargeCollectedError(paystackCollectionReference(paymentObj), err)
+			}
+			// Preserve existing Stripe/other-gateway behavior.
 		}
 	}
 
@@ -925,7 +946,7 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 	p.Logger.Info(ctx, "processing card payment",
 		"payment_id", paymentObj.ID,
 		"customer_id", paymentObj.Metadata["customer_id"],
-		"payment_method_id", paymentObj.PaymentMethodID,
+		"payment_method_id", paystack.MaskAuthorizationCode(paymentObj.PaymentMethodID),
 		"amount", paymentObj.Amount.String(),
 	)
 
@@ -961,6 +982,12 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 		"payment_id", paymentObj.ID,
 	)
 
+	// Paystack-collected subscriptions charge a saved card authorization instead of a Stripe
+	// payment method. Everything else keeps the Stripe path below.
+	if isPaystackCardPayment(paymentObj) {
+		return p.handlePaystackCardPayment(ctx, paymentObj, customerID)
+	}
+
 	// Get Stripe integration
 	stripeIntegration, err := p.IntegrationFactory.GetStripeIntegration(ctx)
 	if err != nil {
@@ -994,7 +1021,7 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 		p.Logger.Info(ctx, "using default payment method for card payment",
 			"customer_id", customerID,
 			"payment_id", paymentObj.ID,
-			"payment_method_id", paymentObj.PaymentMethodID,
+			"payment_method_id", paystack.MaskAuthorizationCode(paymentObj.PaymentMethodID),
 			"card_last4", func() string {
 				if defaultPaymentMethod.Card != nil {
 					return defaultPaymentMethod.Card.Last4
@@ -1020,21 +1047,7 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 
 	paymentIntentResp, err := stripeIntegration.PaymentSvc.ChargeSavedPaymentMethod(ctx, chargeReq, custSvc, invSvc)
 	if err != nil {
-		// Update payment status to failed
-		updateReq := &dto.UpdatePaymentRequest{
-			PaymentStatus: lo.ToPtr(string(types.PaymentStatusFailed)),
-			ErrorMessage:  lo.ToPtr(err.Error()),
-			FailedAt:      lo.ToPtr(time.Now().UTC()),
-		}
-
-		paymentService := NewPaymentService(p.ServiceParams)
-		if _, updateErr := paymentService.UpdatePayment(ctx, paymentObj.ID, *updateReq); updateErr != nil {
-			p.Logger.Error(ctx, "failed to update payment status to failed",
-				"error", updateErr,
-				"payment_id", paymentObj.ID,
-			)
-		}
-
+		p.markCardPaymentFailed(ctx, paymentObj, err)
 		return err
 	}
 
@@ -1059,12 +1072,148 @@ func (p *paymentProcessor) handleCardPayment(ctx context.Context, paymentObj *pa
 	p.Logger.Info(ctx, "successfully processed card payment",
 		"payment_id", paymentObj.ID,
 		"customer_id", customerID,
-		"payment_method_id", paymentObj.PaymentMethodID,
+		"payment_method_id", paystack.MaskAuthorizationCode(paymentObj.PaymentMethodID),
 		"payment_intent_id", paymentIntentResp.ID,
 		"amount", paymentObj.Amount.String(),
 	)
 
 	return nil
+}
+
+// isPaystackCardPayment reports whether a card payment must be charged through Paystack: either
+// the payment was created for that gateway, or its payment method is a Paystack authorization code.
+func isPaystackCardPayment(paymentObj *payment.Payment) bool {
+	if lo.FromPtr(paymentObj.PaymentGateway) == string(types.PaymentGatewayTypePaystack) {
+		return true
+	}
+	return paystack.IsAuthorizationCode(paymentObj.PaymentMethodID)
+}
+
+// isKnownPaystackCollection is true only after Paystack proved success and the in-flight payment
+// carries the provider result. Persistence/post-processing failures from this point are collected
+// outcomes, never declines.
+func isKnownPaystackCollection(paymentObj *payment.Payment) bool {
+	return isPaystackCardPayment(paymentObj) &&
+		paymentObj.PaymentStatus == types.PaymentStatusSucceeded &&
+		lo.FromPtr(paymentObj.GatewayPaymentID) != ""
+}
+
+func paystackCollectionReference(paymentObj *payment.Payment) string {
+	if reference := lo.FromPtr(paymentObj.GatewayTrackingID); reference != "" {
+		return reference
+	}
+	return lo.FromPtr(paymentObj.GatewayPaymentID)
+}
+
+// handlePaystackCardPayment charges a saved Paystack card authorization off-session. On success the
+// payment is marked succeeded, which lets the generic post-processing settle the invoice; on failure
+// the payment is marked failed and the error is returned so wallet fallback and dunning still run.
+func (p *paymentProcessor) handlePaystackCardPayment(ctx context.Context, paymentObj *payment.Payment, customerID string) error {
+	if !paystack.IsAuthorizationCode(paymentObj.PaymentMethodID) {
+		err := ierr.NewError("no saved Paystack authorization for this payment").
+			WithHint("Collect a payment with a reusable card before charging it off-session").
+			WithReportableDetails(map[string]interface{}{
+				"payment_id":  paymentObj.ID,
+				"customer_id": customerID,
+			}).
+			Mark(ierr.ErrValidation)
+		p.markCardPaymentFailed(ctx, paymentObj, err)
+		return err
+	}
+
+	paystackIntegration, err := p.IntegrationFactory.GetPaystackIntegration(ctx)
+	if err != nil {
+		return ierr.WithError(err).
+			WithHint("Failed to get Paystack integration").
+			Mark(ierr.ErrSystem)
+	}
+
+	custSvc := NewCustomerService(p.ServiceParams)
+	invSvc := NewInvoiceService(p.ServiceParams)
+
+	result, err := paystackIntegration.PaymentSvc.ChargeSavedAuthorization(ctx, &paystack.ChargeAuthorizationParams{
+		InvoiceID:         paymentObj.DestinationID,
+		CustomerID:        customerID,
+		PaymentID:         paymentObj.ID,
+		Amount:            paymentObj.Amount,
+		Currency:          paymentObj.Currency,
+		AuthorizationCode: paymentObj.PaymentMethodID,
+		Email:             p.savedPaystackEmail(ctx, paymentObj),
+		Metadata:          map[string]string{"subscription_id": paymentObj.Metadata["subscription_id"]},
+	}, custSvc, invSvc)
+	if err != nil {
+		if paystack.IsChargeOutcomeUnknown(err) {
+			// The card may already have been debited. Do NOT mark this failed: ProcessPayment
+			// keeps it PROCESSING so no other collection attempt is made for the same invoice.
+			p.Logger.Error(ctx, "Paystack saved card charge outcome unknown",
+				"error", err,
+				"payment_id", paymentObj.ID,
+				"customer_id", customerID,
+			)
+			return err
+		}
+		p.markCardPaymentFailed(ctx, paymentObj, err)
+		return err
+	}
+
+	// Record the provider result on the in-flight payment. ProcessPayment owns the single
+	// persistence below; writing here as well would let its stale copy clear these gateway ids.
+	paymentObj.GatewayPaymentID = lo.ToPtr(result.GatewayPaymentID)
+	paymentObj.GatewayTrackingID = lo.ToPtr(result.Reference)
+	paymentObj.PaymentGateway = lo.ToPtr(string(types.PaymentGatewayTypePaystack))
+
+	p.Logger.Info(ctx, "successfully processed Paystack saved card payment",
+		"payment_id", paymentObj.ID,
+		"customer_id", customerID,
+		"paystack_reference", result.Reference,
+		"gateway_payment_id", result.GatewayPaymentID,
+		"amount", paymentObj.Amount.String(),
+	)
+
+	return nil
+}
+
+// savedPaystackEmail returns the Paystack customer email captured with the authorization, so the
+// charge uses the email the card is actually bound to. Empty falls back to the FlexPrice customer.
+func (p *paymentProcessor) savedPaystackEmail(ctx context.Context, paymentObj *payment.Payment) string {
+	subscriptionID := paymentObj.Metadata["subscription_id"]
+	if subscriptionID == "" || p.SubRepo == nil {
+		return ""
+	}
+	sub, err := p.SubRepo.Get(ctx, subscriptionID)
+	if err != nil {
+		p.Logger.Info(ctx, "unable to load subscription for saved Paystack email",
+			"error", err,
+			"payment_id", paymentObj.ID,
+			"subscription_id", subscriptionID,
+		)
+		return ""
+	}
+	return sub.Metadata[paystack.MetadataKeyCustomerEmail]
+}
+
+// markCardPaymentFailed records a failed card charge on the payment record.
+func (p *paymentProcessor) markCardPaymentFailed(ctx context.Context, paymentObj *payment.Payment, cause error) {
+	updateReq := &dto.UpdatePaymentRequest{
+		PaymentStatus: lo.ToPtr(string(types.PaymentStatusFailed)),
+		ErrorMessage:  lo.ToPtr(cause.Error()),
+		FailedAt:      lo.ToPtr(time.Now().UTC()),
+	}
+
+	paymentService := NewPaymentService(p.ServiceParams)
+	if _, updateErr := paymentService.UpdatePayment(ctx, paymentObj.ID, *updateReq); updateErr != nil {
+		p.Logger.Error(ctx, "failed to update payment status to failed",
+			"error", updateErr,
+			"payment_id", paymentObj.ID,
+		)
+	}
+}
+
+// isUnresolvedGatewayOutcome reports whether a processing error leaves money in an undecided
+// state: either the gateway outcome is unknown, or it collected and we failed to persist that.
+// Neither may be turned into a terminal FAILED payment — that invites a second collection.
+func isUnresolvedGatewayOutcome(err error) bool {
+	return paystack.IsChargeOutcomeUnknown(err) || paystack.IsChargeCollected(err)
 }
 
 // handleIncompleteSubscriptionPayment runs subscription activation / trial conversion when a qualifying

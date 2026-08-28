@@ -685,3 +685,127 @@ func TestAuthenticateMiddleware_ConfigAPIKeyIsSuperAdmin(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, []string{types.RoleSuperAdmin.String()}, capturedRoles)
 }
+
+func TestAuthenticateMiddleware_PlaqadSuperAdminAuthority(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newPlaqadServer := func(status int, body string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/api/v1/admin/me", r.URL.Path)
+			assert.Equal(t, "Bearer plaqad-admin-token", r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}))
+	}
+
+	mappedUser := func(status types.Status, roles []string) *user.User {
+		return &user.User{
+			ID:    "usr_flexprice_dashboard",
+			Email: "dashboard@plaqad.com",
+			Type:  types.UserTypeUser,
+			Roles: roles,
+			BaseModel: types.BaseModel{
+				TenantID: "t_plaqad",
+				Status:   status,
+			},
+		}
+	}
+
+	newRouter := func(baseURL string, mapped *user.User) *gin.Engine {
+		cfg := &config.Configuration{
+			Auth: config.AuthConfig{
+				Provider: types.AuthProviderFlexprice,
+				Secret:   testSecret,
+				APIKey:   config.APIKeyConfig{Header: "x-api-key"},
+				Plaqad: config.PlaqadAuthConfig{
+					Enabled:        true,
+					BaseURL:        baseURL,
+					TenantID:       "t_plaqad",
+					UserID:         "usr_flexprice_dashboard",
+					TimeoutSeconds: 2,
+				},
+			},
+		}
+		users := testutil.NewInMemoryUserStore()
+		if mapped != nil {
+			ctx := types.SetTenantID(context.Background(), mapped.TenantID)
+			require.NoError(t, users.Create(ctx, mapped))
+		}
+
+		r := gin.New()
+		r.Use(AuthenticateMiddleware(cfg, nil, &fakeEnvironmentRepo{
+			environments: []*domainEnvironment.Environment{
+				testEnvironment("env_plaqad", "t_plaqad", types.EnvironmentProduction),
+			},
+		}, users, newTestLogger(t)))
+		r.GET("/test", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"tenant_id": types.GetTenantID(c.Request.Context()),
+				"user_id":   types.GetUserID(c.Request.Context()),
+				"roles":     types.GetRoles(c.Request.Context()),
+			})
+		})
+		return r
+	}
+
+	do := func(router *gin.Engine, token string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set(types.HeaderEnvironment, "env_plaqad")
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("maps a live Plaqad Super Admin to the configured Flexprice principal", func(t *testing.T) {
+		server := newPlaqadServer(http.StatusOK, `{"user":{"id":"plaqad-admin","isAdmin":true}}`)
+		defer server.Close()
+
+		w := do(newRouter(server.URL, mappedUser(types.StatusPublished, []string{types.RoleSuperAdmin.String()})), "plaqad-admin-token")
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.JSONEq(t, `{"tenant_id":"t_plaqad","user_id":"usr_flexprice_dashboard","roles":["super_admin"]}`, w.Body.String())
+	})
+
+	t.Run("rejects a token when Plaqad says the caller is not an admin", func(t *testing.T) {
+		server := newPlaqadServer(http.StatusForbidden, `{"message":"Not an admin"}`)
+		defer server.Close()
+
+		w := do(newRouter(server.URL, mappedUser(types.StatusPublished, []string{types.RoleSuperAdmin.String()})), "plaqad-admin-token")
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.JSONEq(t, `{"error":"Plaqad Super Admin access required"}`, w.Body.String())
+	})
+
+	t.Run("fails closed when the mapped Flexprice principal loses super_admin", func(t *testing.T) {
+		server := newPlaqadServer(http.StatusOK, `{"user":{"id":"plaqad-admin","isAdmin":true}}`)
+		defer server.Close()
+
+		w := do(newRouter(server.URL, mappedUser(types.StatusPublished, []string{types.RoleAllReader.String()})), "plaqad-admin-token")
+
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	})
+
+	t.Run("does not fall back to native Flexprice JWT validation", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.NotEqual(t, "Bearer plaqad-admin-token", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer server.Close()
+
+		nativeToken := makeJWT(t, "t_tenant1", "usr_dev", "env_dev", 1)
+		w := do(newRouter(server.URL, mappedUser(types.StatusPublished, []string{types.RoleSuperAdmin.String()})), nativeToken)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("surfaces an Auth outage as unavailable rather than bypassing it", func(t *testing.T) {
+		server := newPlaqadServer(http.StatusInternalServerError, `{"message":"unavailable"}`)
+		defer server.Close()
+
+		w := do(newRouter(server.URL, mappedUser(types.StatusPublished, []string{types.RoleSuperAdmin.String()})), "plaqad-admin-token")
+
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	})
+}

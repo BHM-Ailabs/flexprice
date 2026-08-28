@@ -21,6 +21,7 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/subscription"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	paddleint "github.com/flexprice/flexprice/internal/integration/paddle"
+	"github.com/flexprice/flexprice/internal/integration/paystack"
 	"github.com/flexprice/flexprice/internal/temporal/models"
 	invoiceTemporalModels "github.com/flexprice/flexprice/internal/temporal/models/invoice"
 	subscriptionModels "github.com/flexprice/flexprice/internal/temporal/models/subscription"
@@ -2056,6 +2057,111 @@ func (s *subscriptionService) UpdateSubscription(ctx context.Context, subscripti
 
 	// Return the updated subscription
 	return s.GetSubscription(ctx, subscriptionID)
+}
+
+// SaveGatewayPaymentMethod persists a reusable gateway payment method on the subscription so
+// renewals can charge it off-session, merging the supplied descriptors (card last4, bank,
+// gateway customer email) into the subscription metadata. It is a no-op when nothing changes.
+func (s *subscriptionService) SaveGatewayPaymentMethod(
+	ctx context.Context,
+	subscriptionID string,
+	gatewayPaymentMethodID string,
+	metadata map[string]string,
+) error {
+	if subscriptionID == "" || gatewayPaymentMethodID == "" {
+		return ierr.NewError("subscription id and gateway payment method id are required").
+			WithHint("Provide the subscription and the gateway payment method to save").
+			Mark(ierr.ErrValidation)
+	}
+	saved := false
+
+	// Lock the row for the read-merge-write: a renewal or a concurrent capture must not have its
+	// own subscription changes clobbered by a stale in-memory copy.
+	if err := s.DB.WithTx(ctx, func(txCtx context.Context) error {
+		sub, err := s.SubRepo.GetForUpdate(txCtx, subscriptionID)
+		if err != nil {
+			return err
+		}
+
+		metadataToMerge := make(map[string]string, len(metadata))
+		for key, value := range metadata {
+			metadataToMerge[key] = value
+		}
+
+		if paystack.IsAuthorizationCode(gatewayPaymentMethodID) {
+			if metadataToMerge[paystack.MetadataKeyCustomerEmail] == "" {
+				return ierr.NewError("Paystack customer email is required to save a reusable authorization").
+					Mark(ierr.ErrValidation)
+			}
+
+			incomingCapturedAt, err := time.Parse(time.RFC3339Nano, metadataToMerge[paystack.MetadataKeyCapturedAt])
+			if err != nil {
+				return ierr.WithError(err).
+					WithHint("Paystack authorization capture time is required").
+					Mark(ierr.ErrValidation)
+			}
+			if existingValue := sub.Metadata[paystack.MetadataKeyCapturedAt]; existingValue != "" {
+				if existingCapturedAt, parseErr := time.Parse(time.RFC3339Nano, existingValue); parseErr == nil &&
+					incomingCapturedAt.Before(existingCapturedAt) {
+					// A delayed older webhook must never replace the card captured more recently.
+					return nil
+				}
+			}
+
+			if lo.FromPtr(sub.GatewayPaymentMethodID) != gatewayPaymentMethodID {
+				// A new card replaces the complete bounded descriptor set. Explicit empties clear
+				// optional details from the previous card instead of leaving stale display data.
+				for _, key := range []string{
+					paystack.MetadataKeyCardLast4,
+					paystack.MetadataKeyCardType,
+					paystack.MetadataKeyCardBank,
+					paystack.MetadataKeyCardExpMonth,
+					paystack.MetadataKeyCardExpYear,
+				} {
+					if _, present := metadataToMerge[key]; !present {
+						metadataToMerge[key] = ""
+					}
+				}
+			}
+		}
+
+		changed := lo.FromPtr(sub.GatewayPaymentMethodID) != gatewayPaymentMethodID
+		for key, value := range metadataToMerge {
+			if sub.Metadata[key] != value {
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			return nil
+		}
+
+		sub.GatewayPaymentMethodID = lo.ToPtr(gatewayPaymentMethodID)
+		if len(metadataToMerge) > 0 && sub.Metadata == nil {
+			sub.Metadata = types.Metadata{}
+		}
+		for key, value := range metadataToMerge {
+			sub.Metadata[key] = value
+		}
+
+		if err := s.SubRepo.Update(txCtx, sub); err != nil {
+			return err
+		}
+		saved = true
+		return nil
+	}); err != nil {
+		return ierr.WithError(err).
+			WithHint("Failed to save the gateway payment method on the subscription").
+			Mark(ierr.ErrDatabase)
+	}
+
+	if saved {
+		s.Logger.Info(ctx, "saved gateway payment method on subscription",
+			"subscription_id", subscriptionID,
+			"gateway_payment_method_id", paystack.MaskAuthorizationCode(gatewayPaymentMethodID))
+	}
+
+	return nil
 }
 
 // CancelSubscription provides enhanced cancellation with proration support

@@ -263,6 +263,39 @@ func AuthenticateMiddleware(cfg *config.Configuration, secretService service.Sec
 		}
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		if cfg.Auth.Plaqad.Enabled {
+			identity, err := auth.VerifyPlaqadSuperAdmin(c.Request.Context(), cfg.Auth.Plaqad, tokenString)
+			if err != nil {
+				switch {
+				case errors.Is(err, auth.ErrPlaqadUnauthorized):
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+				case errors.Is(err, auth.ErrPlaqadForbidden):
+					c.JSON(http.StatusForbidden, gin.H{"error": "Plaqad Super Admin access required"})
+				default:
+					logger.Error(c.Request.Context(), "Plaqad admin authorization failed", "error", err)
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Authorization service unavailable"})
+				}
+				c.Abort()
+				return
+			}
+
+			tenantCtx := types.SetTenantID(c.Request.Context(), cfg.Auth.Plaqad.TenantID)
+			mappedUser, err := userRepo.GetByID(tenantCtx, cfg.Auth.Plaqad.UserID)
+			if err != nil || mappedUser == nil || mappedUser.Status != types.StatusPublished || !hasRole(mappedUser.Roles, types.RoleSuperAdmin.String()) {
+				logger.Error(c.Request.Context(), "Plaqad dashboard principal is unavailable", "error", "mapped Flexprice user is missing, inactive, or not a super_admin", "plaqad_user_id", identity.ID)
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Dashboard authorization is not configured"})
+				c.Abort()
+				return
+			}
+
+			if err := setContextValues(c, environmentRepo, cfg.Auth.Plaqad.TenantID, cfg.Auth.Plaqad.UserID, "", "", mappedUser.Roles); err != nil {
+				abortEnvironmentResolution(c, logger, err, cfg.Auth.Plaqad.TenantID, cfg.Auth.Plaqad.UserID)
+				return
+			}
+			c.Next()
+			return
+		}
+
 		claims, err := authProvider.ValidateToken(c.Request.Context(), tokenString)
 		if err != nil {
 			logger.Error(c.Request.Context(), "failed to validate token", "error", err)
@@ -319,6 +352,15 @@ func AuthenticateMiddleware(cfg *config.Configuration, secretService service.Sec
 		}
 		c.Next()
 	}
+}
+
+func hasRole(roles []string, expected string) bool {
+	for _, role := range roles {
+		if role == expected {
+			return true
+		}
+	}
+	return false
 }
 
 // SessionTokenAuthMiddleware validates session JWT tokens

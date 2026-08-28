@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flexprice/flexprice/internal/api/dto"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/integration/payments"
 	"github.com/flexprice/flexprice/internal/interfaces"
@@ -37,7 +38,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, event *WebhookEvent, servic
 	if err != nil {
 		return err
 	}
-	if verified.Status != "success" || verified.Reference != event.Data.Reference {
+	if verified.Status != transactionStatusSuccess || verified.Reference != event.Data.Reference {
 		return ierr.NewError("Paystack transaction verification did not succeed").
 			WithHint("Wait for a verified charge.success transaction").
 			Mark(ierr.ErrValidation)
@@ -60,6 +61,14 @@ func (h *WebhookHandler) Handle(ctx context.Context, event *WebhookEvent, servic
 	gatewayPaymentID := verified.Reference
 	if verified.ID != 0 {
 		gatewayPaymentID = fmt.Sprintf("%d", verified.ID)
+	}
+
+	// A reusable authorization means the customer's card can be charged again off-session at
+	// renewal. Capture it before settling the payment so every verified success path stores it.
+	// A persistence failure is returned: charge.success is idempotent, so Paystack retrying the
+	// webhook is strictly better than silently losing the saved card.
+	if err := h.captureReusableAuthorization(ctx, verified, payment, services); err != nil {
+		return err
 	}
 
 	filter := types.NewDefaultCheckoutSessionFilter()
@@ -105,6 +114,78 @@ func (h *WebhookHandler) Handle(ctx context.Context, event *WebhookEvent, servic
 		GatewayPaymentID:   gatewayPaymentID,
 		SucceededAt:        succeededAt,
 	})
+}
+
+// captureReusableAuthorization persists a reusable card authorization on the subscription that
+// owns the paid invoice, so renewals can charge the same card off-session. Nothing to capture is
+// success; a failed lookup or write is an error so the idempotent webhook is retried.
+func (h *WebhookHandler) captureReusableAuthorization(
+	ctx context.Context,
+	transaction *TransactionData,
+	paymentResp *dto.PaymentResponse,
+	services *interfaces.ServiceDependencies,
+) error {
+	authorization := transaction.Authorization
+	if authorization == nil || !authorization.Reusable || !IsAuthorizationCode(authorization.AuthorizationCode) {
+		return nil
+	}
+	if paymentResp == nil || paymentResp.DestinationType != types.PaymentDestinationTypeInvoice || paymentResp.DestinationID == "" {
+		return nil
+	}
+	if services == nil || services.InvoiceService == nil || services.SubscriptionService == nil {
+		return nil
+	}
+	if transaction.Customer == nil || strings.TrimSpace(transaction.Customer.Email) == "" {
+		return ierr.NewError("verified Paystack customer email is required to save a reusable authorization").
+			WithHint("Retry after Paystack verification returns the authorization owner's email").
+			Mark(ierr.ErrValidation)
+	}
+	capturedAt, err := time.Parse(time.RFC3339, transaction.PaidAt)
+	if err != nil {
+		return ierr.WithError(err).
+			WithHint("Verified Paystack paid_at is required to order reusable authorizations").
+			Mark(ierr.ErrValidation)
+	}
+
+	invoiceResp, err := services.InvoiceService.GetInvoice(ctx, paymentResp.DestinationID)
+	if err != nil {
+		h.logger.Error(ctx, "unable to load invoice while capturing Paystack authorization",
+			"error", err,
+			"flexprice_payment_id", paymentResp.ID,
+			"invoice_id", paymentResp.DestinationID)
+		return err
+	}
+	subscriptionID := lo.FromPtr(invoiceResp.SubscriptionID)
+	if subscriptionID == "" {
+		return nil
+	}
+
+	// Always replace the bounded descriptor set for an accepted authorization. Empty optional
+	// values intentionally clear details from a prior card rather than displaying stale data.
+	metadata := map[string]string{
+		MetadataKeyCustomerEmail: strings.TrimSpace(transaction.Customer.Email),
+		MetadataKeyCardLast4:     authorization.Last4,
+		MetadataKeyCardType:      authorization.CardType,
+		MetadataKeyCardBank:      authorization.Bank,
+		MetadataKeyCardExpMonth:  authorization.ExpMonth,
+		MetadataKeyCardExpYear:   authorization.ExpYear,
+		MetadataKeyCapturedAt:    capturedAt.UTC().Format(time.RFC3339Nano),
+	}
+
+	if err := services.SubscriptionService.SaveGatewayPaymentMethod(ctx, subscriptionID, authorization.AuthorizationCode, metadata); err != nil {
+		h.logger.Error(ctx, "failed to save Paystack authorization on subscription",
+			"error", err,
+			"subscription_id", subscriptionID,
+			"flexprice_payment_id", paymentResp.ID)
+		return err
+	}
+
+	h.logger.Info(ctx, "saved reusable Paystack authorization on subscription",
+		"subscription_id", subscriptionID,
+		"flexprice_payment_id", paymentResp.ID,
+		"card_last4", authorization.Last4)
+
+	return nil
 }
 
 func resolveFlexpricePaymentID(ctx context.Context, transaction *TransactionData, services *interfaces.ServiceDependencies) (string, error) {

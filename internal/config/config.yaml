@@ -18,6 +18,19 @@ auth:
         user_id: "00000000-0000-0000-0000-000000000000"
         name: "Local Dev API Key"
         is_active: true
+  # Optional Plaqad control plane for human dashboard access. When enabled,
+  # native Flexprice JWTs cannot authenticate private routes; a Bearer token
+  # must pass account-api's live Super Admin check. API keys remain available
+  # for machine integrations.
+  plaqad:
+    enabled: false
+    base_url: "https://account-api.plaqad.com"
+    client_id: ""
+    client_secret: ""
+    redirect_uri: "http://localhost:3000/auth/plaqad/callback"
+    tenant_id: ""
+    user_id: ""
+    timeout_seconds: 5
 
 kafka:
   brokers: "localhost:29092" # For local mode

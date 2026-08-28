@@ -94,6 +94,10 @@ type SubscriptionService interface {
 	GetSubscription(ctx context.Context, id string) (*dto.SubscriptionResponse, error)
 	GetSubscriptionV2(ctx context.Context, id string, expand types.Expand) (*dto.SubscriptionResponseV2, error)
 	UpdateSubscription(ctx context.Context, subscriptionID string, req dto.UpdateSubscriptionRequest) (*dto.SubscriptionResponse, error)
+	// SaveGatewayPaymentMethod persists a reusable gateway payment method (a Stripe payment
+	// method id or a Paystack authorization code) on the subscription so renewals can charge
+	// it off-session. Extra keys are merged into the subscription metadata.
+	SaveGatewayPaymentMethod(ctx context.Context, subscriptionID string, gatewayPaymentMethodID string, metadata map[string]string) error
 	CancelSubscription(ctx context.Context, subscriptionID string, req *dto.CancelSubscriptionRequest) (*dto.CancelSubscriptionResponse, error)
 	ActivateIncompleteSubscription(ctx context.Context, subscriptionID string) error
 	HandleSubscriptionActivatingInvoicePaid(ctx context.Context, inv *invoice.Invoice) error

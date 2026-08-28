@@ -2139,6 +2139,10 @@ func aggregateMeteredEntitlementsForBilling(entitlements []*entitlement.Entitlem
 	hasUnlimitedEntitlement := false
 	isSoftLimit := false
 	var totalLimit int64 = 0
+	totalGrantQuota := decimal.Zero
+	var grantMeasure types.EntitlementGrantMeasure
+	var grantDurationValue *int
+	var grantDurationUnit types.EntitlementGrantDurationUnit
 	var usageResetPeriod types.EntitlementUsageResetPeriod
 	resetPeriodCounts := make(map[types.EntitlementUsageResetPeriod]int)
 
@@ -2161,6 +2165,15 @@ func aggregateMeteredEntitlementsForBilling(entitlements []*entitlement.Entitlem
 
 		if e.IsSoftLimit {
 			isSoftLimit = true
+		}
+
+		if e.HasGrantConfig() {
+			totalGrantQuota = totalGrantQuota.Add(lo.FromPtr(e.GrantQuota))
+			if grantMeasure == "" {
+				grantMeasure = e.GrantMeasure
+				grantDurationValue = e.GrantDurationValue
+				grantDurationUnit = e.GrantDurationUnit
+			}
 		}
 
 		if e.UsageResetPeriod != "" {
@@ -2188,6 +2201,12 @@ func aggregateMeteredEntitlementsForBilling(entitlements []*entitlement.Entitlem
 		IsSoftLimit:      isSoftLimit,
 		UsageResetPeriod: usageResetPeriod,
 		AggregationMode:  aggregationMode,
+	}
+	if aggregationMode == types.EntitlementAggregationModeAdditive && totalGrantQuota.IsPositive() {
+		out.GrantMeasure = grantMeasure
+		out.GrantQuota = lo.ToPtr(totalGrantQuota)
+		out.GrantDurationValue = grantDurationValue
+		out.GrantDurationUnit = grantDurationUnit
 	}
 
 	if aggregationMode == types.EntitlementAggregationModeParallel {

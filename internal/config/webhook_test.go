@@ -93,3 +93,24 @@ func TestWebhook_normalizeTenantKeys_NilAndEmptySafe(t *testing.T) {
 	require.NotPanics(t, func() { emptyWebhook.normalizeTenantKeys() })
 	require.Nil(t, emptyWebhook.Tenants)
 }
+
+func TestNewConfig_WebhookTenantsEnvOverride(t *testing.T) {
+	t.Setenv("FLEXPRICE_WEBHOOK_TENANTS", `{
+		"tenant_PROD": {
+			"enabled": true,
+			"endpoint": "https://account-api.plaqad.com/api/v1/billing/flexprice/webhook",
+			"headers": {"x-plaqad-webhook-secret": "test-secret"},
+			"excluded_events": ["invoice.created"]
+		}
+	}`)
+
+	cfg, err := NewConfig()
+	require.NoError(t, err)
+
+	tenant, ok := cfg.Webhook.TenantConfig("tenant_PROD")
+	require.True(t, ok)
+	require.True(t, tenant.Enabled)
+	require.Equal(t, "https://account-api.plaqad.com/api/v1/billing/flexprice/webhook", tenant.Endpoint)
+	require.Equal(t, "test-secret", tenant.Headers["x-plaqad-webhook-secret"])
+	require.Equal(t, []string{"invoice.created"}, tenant.ExcludedEvents)
+}
