@@ -639,7 +639,8 @@ func (r *invoiceLineItemRepository) GetBilledAmountsBySubscriptionLineItem(
 }
 
 // GetRevenueByCustomer aggregates invoice line item amounts grouped by customer_id
-// and price_type for DRAFT/FINALIZED invoices within the given period.
+// and price_type for FINALIZED invoices within the given period. Draft invoices
+// remain mutable and are not recognized revenue.
 func (r *invoiceLineItemRepository) GetRevenueByCustomer(
 	ctx context.Context,
 	periodStart, periodEnd time.Time,
@@ -679,7 +680,7 @@ func (r *invoiceLineItemRepository) GetRevenueByCustomer(
 		FROM invoice_line_items ili
 		INNER JOIN invoices inv
 			ON inv.id = ili.invoice_id
-			AND inv.invoice_status IN ('DRAFT', 'FINALIZED')
+			AND inv.invoice_status = 'FINALIZED'
 			AND inv.status = 'published'
 		WHERE ili.period_start >= $3
 			AND ili.period_end < $4
@@ -771,7 +772,7 @@ func (r *invoiceLineItemRepository) GetVoiceMinutesByCustomer(
 		FROM invoice_line_items ili
 		INNER JOIN invoices inv
 			ON inv.id = ili.invoice_id
-			AND inv.invoice_status IN ('DRAFT', 'FINALIZED')
+			AND inv.invoice_status = 'FINALIZED'
 			AND inv.status = 'published'
 		WHERE ili.period_start >= $3
 			AND ili.period_end < $4
@@ -878,7 +879,7 @@ func (r *invoiceLineItemRepository) GetRevenueTimeSeries(
 		FROM invoice_line_items ili
 		INNER JOIN invoices inv
 			ON inv.id = ili.invoice_id
-			AND inv.invoice_status IN ('DRAFT', 'FINALIZED')
+			AND inv.invoice_status = 'FINALIZED'
 			AND inv.status = 'published'
 		WHERE ili.period_start >= $4
 			AND ili.period_end < $5
@@ -975,7 +976,7 @@ func (r *invoiceLineItemRepository) GetVoiceMinutesTimeSeries(
 		FROM invoice_line_items ili
 		INNER JOIN invoices inv
 			ON inv.id = ili.invoice_id
-			AND inv.invoice_status IN ('DRAFT', 'FINALIZED')
+			AND inv.invoice_status = 'FINALIZED'
 			AND inv.status = 'published'
 		WHERE ili.period_start >= $4
 			AND ili.period_end < $5

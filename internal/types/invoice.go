@@ -409,6 +409,9 @@ type InvoiceFilter struct {
 	*QueryFilter
 	*TimeRangeFilter
 
+	// search matches invoice number, idempotency reference, or invoice ID.
+	Search string `json:"search,omitempty" form:"search"`
+
 	Filters []*FilterCondition `json:"filters,omitempty" form:"filters" validate:"omitempty"`
 	Sort    []*SortCondition   `json:"sort,omitempty" form:"sort" validate:"omitempty"`
 	// invoice_ids restricts results to invoices with the specified IDs
@@ -500,6 +503,12 @@ func (f *InvoiceFilter) Validate() error {
 		if err := f.BillingReason.Validate(); err != nil {
 			return err
 		}
+	}
+
+	if len(f.Search) > 200 {
+		return ierr.NewError("invoice search exceeds maximum length").
+			WithHint("search must not exceed 200 characters").
+			Mark(ierr.ErrValidation)
 	}
 
 	return nil

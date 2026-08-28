@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -22,6 +23,36 @@ type DashboardService interface {
 
 type dashboardService struct {
 	ServiceParams
+}
+
+type revenueDashboardCustomerInfo struct {
+	Name       string
+	ExternalID string
+	Email      string
+}
+
+type revenueDashboardPlanInfo struct {
+	Name       string
+	ProductKey string
+}
+
+type revenueDashboardAccumulator struct {
+	ID    string
+	Label string
+	Value decimal.Decimal
+}
+
+type revenueDashboardRankingGroups struct {
+	Apps       map[string]*revenueDashboardAccumulator
+	Users      map[string]*revenueDashboardAccumulator
+	Plans      map[string]*revenueDashboardAccumulator
+	Workspaces map[string]*revenueDashboardAccumulator
+}
+
+type revenueDashboardGraphData struct {
+	Recognized map[time.Time]decimal.Decimal
+	Invoiced   map[time.Time]decimal.Decimal
+	Paid       map[time.Time]decimal.Decimal
 }
 
 // NewDashboardService creates a new dashboard service
@@ -197,7 +228,7 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 		}
 	}
 
-	// Step 3: Aggregate per (customer, currency)
+	// Step 3: Aggregate recognized revenue per (customer, currency).
 	type customerKey struct {
 		customerID string
 		currency   string
@@ -234,7 +265,13 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 		}
 	}
 
-	// Step 4: Bulk-fetch customer details for enrichment
+	invoices, err := s.listRevenueDashboardInvoices(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 4: Bulk-fetch customer details for enrichment. Include customers that
+	// have finalized invoices even when their recognized line-item amount is zero.
 	uniqueCustomerIDs := make([]string, 0, len(customerMap))
 	seen := make(map[string]bool)
 	for key := range customerMap {
@@ -243,12 +280,14 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 			uniqueCustomerIDs = append(uniqueCustomerIDs, key.customerID)
 		}
 	}
-
-	type customerInfo struct {
-		Name       string
-		ExternalID string
+	for _, invoice := range invoices {
+		if !seen[invoice.CustomerID] {
+			seen[invoice.CustomerID] = true
+			uniqueCustomerIDs = append(uniqueCustomerIDs, invoice.CustomerID)
+		}
 	}
-	customerInfoMap := make(map[string]customerInfo, len(uniqueCustomerIDs))
+
+	customerInfoMap := make(map[string]revenueDashboardCustomerInfo, len(uniqueCustomerIDs))
 
 	if len(uniqueCustomerIDs) > 0 {
 		custFilter := &types.CustomerFilter{
@@ -261,9 +300,10 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 			// Continue without customer details rather than failing the entire request
 		} else {
 			for _, c := range customers {
-				customerInfoMap[c.ID] = customerInfo{
+				customerInfoMap[c.ID] = revenueDashboardCustomerInfo{
 					Name:       c.Name,
 					ExternalID: c.ExternalID,
+					Email:      c.Email,
 				}
 			}
 		}
@@ -336,8 +376,10 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 		items = []dto.RevenueDashboardCustomer{}
 	}
 
-	var graph *dto.RevenueDashboardGraph
-	if hasCustomAnalytics && meterID != "" {
+	// The legacy graph omitted currency, so only populate it when the result has a
+	// single currency. The currency-keyed graphs below are always safe to render.
+	var legacyGraph *dto.RevenueDashboardGraph
+	if hasCustomAnalytics && meterID != "" && len(summaries) == 1 {
 		const dateTruncMonth = "month"
 
 		revenueTS, tsErr := s.InvoiceLineItemRepo.GetRevenueTimeSeries(ctx, req.PeriodStart, req.PeriodEnd, dateTruncMonth, req.CustomerIDs)
@@ -355,17 +397,461 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 		}
 
 		revenueByWindow := aggregateRevenueDashboardByWindow(revenueTS)
-		graph = &dto.RevenueDashboardGraph{
+		legacyGraph = &dto.RevenueDashboardGraph{
 			TotalRevenue: buildRevenueDashboardGraphPoints(revenueByWindow),
+			Invoiced:     []types.RevenueGraphPoint{},
+			Paid:         []types.RevenueGraphPoint{},
 			VoiceMinutes: buildVoiceMinutesDashboardGraphPoints(voiceTS),
 		}
 	}
 
+	collections, graphs, aging, leaderboards, err := s.buildRevenueDashboardAnalytics(
+		ctx,
+		req,
+		invoices,
+		customerInfoMap,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &dto.RevenueDashboardResponse{
-		Summaries: summaries,
-		Items:     items,
-		Graph:     graph,
+		Summaries:    summaries,
+		Items:        items,
+		Collections:  collections,
+		Graphs:       graphs,
+		Aging:        aging,
+		Leaderboards: leaderboards,
+		Graph:        legacyGraph,
 	}, nil
+}
+
+func (s *dashboardService) listRevenueDashboardInvoices(
+	ctx context.Context,
+	req dto.RevenueDashboardRequest,
+) ([]*domaininvoice.Invoice, error) {
+	periodEndInclusive := req.PeriodEnd.Add(-time.Nanosecond)
+	filter := types.NewNoLimitInvoiceFilter()
+	filter.InvoiceStatus = []types.InvoiceStatus{types.InvoiceStatusFinalized}
+	filter.PeriodStartGTE = &req.PeriodStart
+	filter.PeriodStartLTE = &periodEndInclusive
+	filter.SkipLineItems = false
+
+	invoices, err := s.InvoiceRepo.List(ctx, filter)
+	if err != nil {
+		return nil, ierr.WithError(err).
+			WithHint("failed to fetch finalized invoices for revenue dashboard").
+			Mark(ierr.ErrDatabase)
+	}
+
+	if len(req.CustomerIDs) == 0 {
+		return invoices, nil
+	}
+
+	allowedCustomers := make(map[string]struct{}, len(req.CustomerIDs))
+	for _, id := range req.CustomerIDs {
+		allowedCustomers[id] = struct{}{}
+	}
+	filtered := make([]*domaininvoice.Invoice, 0, len(invoices))
+	for _, invoice := range invoices {
+		if _, ok := allowedCustomers[invoice.CustomerID]; ok {
+			filtered = append(filtered, invoice)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *dashboardService) buildRevenueDashboardAnalytics(
+	ctx context.Context,
+	req dto.RevenueDashboardRequest,
+	invoices []*domaininvoice.Invoice,
+	customers map[string]revenueDashboardCustomerInfo,
+) (
+	map[string]dto.RevenueCollectionSummary,
+	map[string]dto.RevenueDashboardGraph,
+	map[string][]dto.RevenueAgingRow,
+	map[string]dto.RevenueLeaderboards,
+	error,
+) {
+	planIDs := make([]string, 0)
+	seenPlanIDs := make(map[string]struct{})
+	for _, invoice := range invoices {
+		for _, lineItem := range invoice.LineItems {
+			if lineItem == nil || lineItem.EntityID == nil || lineItem.EntityType == nil ||
+				!strings.EqualFold(*lineItem.EntityType, string(types.InvoiceLineItemEntityTypePlan)) {
+				continue
+			}
+			if _, ok := seenPlanIDs[*lineItem.EntityID]; !ok {
+				seenPlanIDs[*lineItem.EntityID] = struct{}{}
+				planIDs = append(planIDs, *lineItem.EntityID)
+			}
+		}
+	}
+
+	plans := make(map[string]revenueDashboardPlanInfo, len(planIDs))
+	if len(planIDs) > 0 {
+		planRows, err := s.PlanRepo.ListByIDs(ctx, planIDs)
+		if err != nil {
+			return nil, nil, nil, nil, ierr.WithError(err).
+				WithHint("failed to fetch plan attribution for revenue dashboard").
+				Mark(ierr.ErrDatabase)
+		}
+		for _, plan := range planRows {
+			productKey := strings.TrimSpace(plan.Metadata["plaqad_product"])
+			if productKey == "" {
+				productKey = strings.TrimSpace(plan.Metadata["product"])
+			}
+			plans[plan.ID] = revenueDashboardPlanInfo{
+				Name:       plan.Name,
+				ProductKey: strings.ToLower(productKey),
+			}
+		}
+	}
+
+	windowSize := req.WindowSize
+	if windowSize == "" {
+		windowSize = types.WindowSizeDay
+	}
+	asOf := time.Now().UTC()
+	if req.PeriodEnd.Before(asOf) {
+		asOf = req.PeriodEnd.UTC()
+	}
+
+	collections := make(map[string]dto.RevenueCollectionSummary)
+	workspaceSets := make(map[string]map[string]struct{})
+	graphData := make(map[string]*revenueDashboardGraphData)
+	agingRows := make(map[string]map[string]*dto.RevenueAgingRow)
+	rankingGroups := make(map[string]*revenueDashboardRankingGroups)
+
+	for _, invoice := range invoices {
+		currency := strings.ToLower(strings.TrimSpace(invoice.Currency))
+		if currency == "" {
+			continue
+		}
+		collection := collections[currency]
+		collection.TotalInvoiced = collection.TotalInvoiced.Add(invoice.AmountDue)
+		collection.TotalPaid = collection.TotalPaid.Add(invoice.AmountPaid)
+		remaining := invoice.AmountRemaining
+		if remaining.IsNegative() {
+			remaining = decimal.Zero
+		}
+		collection.TotalUnpaid = collection.TotalUnpaid.Add(remaining)
+		collection.InvoiceCount++
+		if invoice.AmountDue.GreaterThan(decimal.Zero) && remaining.IsZero() {
+			collection.PaidInvoiceCount++
+		}
+		if remaining.GreaterThan(decimal.Zero) && invoice.DueDate != nil && invoice.DueDate.Before(asOf) {
+			collection.OverdueInvoiceCount++
+		}
+		collections[currency] = collection
+
+		if workspaceSets[currency] == nil {
+			workspaceSets[currency] = make(map[string]struct{})
+		}
+		workspaceSets[currency][invoice.CustomerID] = struct{}{}
+
+		graph := ensureRevenueDashboardGraphData(graphData, currency)
+		if invoice.PeriodStart != nil {
+			bucket := revenueDashboardBucketStart(*invoice.PeriodStart, windowSize)
+			graph.Invoiced[bucket] = graph.Invoiced[bucket].Add(invoice.AmountDue)
+			graph.Paid[bucket] = graph.Paid[bucket].Add(invoice.AmountPaid)
+		}
+
+		if remaining.GreaterThan(decimal.Zero) {
+			if agingRows[currency] == nil {
+				agingRows[currency] = make(map[string]*dto.RevenueAgingRow)
+			}
+			row, ok := agingRows[currency][invoice.CustomerID]
+			if !ok {
+				info := customers[invoice.CustomerID]
+				name := strings.TrimSpace(info.Name)
+				if name == "" {
+					name = invoice.CustomerID
+				}
+				row = &dto.RevenueAgingRow{
+					WorkspaceID:   invoice.CustomerID,
+					WorkspaceName: name,
+				}
+				agingRows[currency][invoice.CustomerID] = row
+			}
+			addRevenueAgingAmount(row, remaining, invoice.DueDate, asOf)
+		}
+
+		customerInfo := customers[invoice.CustomerID]
+		workspaceLabel := strings.TrimSpace(customerInfo.Name)
+		if workspaceLabel == "" {
+			workspaceLabel = invoice.CustomerID
+		}
+		for _, lineItem := range invoice.LineItems {
+			if lineItem == nil || !revenueDashboardLineItemInPeriod(lineItem, req.PeriodStart, req.PeriodEnd) {
+				continue
+			}
+			amount := lineItem.Amount
+			if amount.IsZero() {
+				continue
+			}
+			lineCurrency := strings.ToLower(strings.TrimSpace(lineItem.Currency))
+			if lineCurrency == "" {
+				lineCurrency = currency
+			}
+			lineGraph := ensureRevenueDashboardGraphData(graphData, lineCurrency)
+			if lineItem.PeriodStart != nil {
+				bucket := revenueDashboardBucketStart(*lineItem.PeriodStart, windowSize)
+				lineGraph.Recognized[bucket] = lineGraph.Recognized[bucket].Add(amount)
+			}
+
+			lineGroups := ensureRevenueDashboardRankingGroups(rankingGroups, lineCurrency)
+			addRevenueDashboardRanking(lineGroups.Workspaces, invoice.CustomerID, workspaceLabel, amount)
+
+			ownerKey := strings.ToLower(strings.TrimSpace(customerInfo.Email))
+			ownerLabel := maskRevenueDashboardEmail(ownerKey)
+			if ownerKey == "" {
+				ownerKey = "unassigned"
+				ownerLabel = "Unassigned billing owner"
+			}
+			addRevenueDashboardRanking(lineGroups.Users, ownerKey, ownerLabel, amount)
+
+			planID, planLabel, productKey := revenueDashboardLineItemAttribution(lineItem, plans)
+			addRevenueDashboardRanking(lineGroups.Plans, planID, planLabel, amount)
+			addRevenueDashboardRanking(lineGroups.Apps, productKey, revenueDashboardProductLabel(productKey), amount)
+		}
+	}
+
+	for currency, workspaces := range workspaceSets {
+		collection := collections[currency]
+		collection.TotalWorkspaces = len(workspaces)
+		collections[currency] = collection
+	}
+
+	graphs := make(map[string]dto.RevenueDashboardGraph, len(graphData))
+	for currency, data := range graphData {
+		graphs[currency] = dto.RevenueDashboardGraph{
+			TotalRevenue: buildRevenueDashboardGraphPointsForWindow(data.Recognized, windowSize),
+			Invoiced:     buildRevenueDashboardGraphPointsForWindow(data.Invoiced, windowSize),
+			Paid:         buildRevenueDashboardGraphPointsForWindow(data.Paid, windowSize),
+		}
+	}
+
+	aging := make(map[string][]dto.RevenueAgingRow, len(agingRows))
+	for currency, rowsByWorkspace := range agingRows {
+		rows := make([]dto.RevenueAgingRow, 0, len(rowsByWorkspace))
+		for _, row := range rowsByWorkspace {
+			rows = append(rows, *row)
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			return rows[i].TotalOutstanding.GreaterThan(rows[j].TotalOutstanding)
+		})
+		aging[currency] = rows
+	}
+
+	leaderboards := make(map[string]dto.RevenueLeaderboards, len(rankingGroups))
+	for currency, groups := range rankingGroups {
+		leaderboards[currency] = dto.RevenueLeaderboards{
+			Apps:       topRevenueDashboardRankings(groups.Apps, 5),
+			Users:      topRevenueDashboardRankings(groups.Users, 5),
+			Plans:      topRevenueDashboardRankings(groups.Plans, 5),
+			Workspaces: topRevenueDashboardRankings(groups.Workspaces, 5),
+		}
+	}
+
+	return collections, graphs, aging, leaderboards, nil
+}
+
+func ensureRevenueDashboardGraphData(
+	graphs map[string]*revenueDashboardGraphData,
+	currency string,
+) *revenueDashboardGraphData {
+	graph, ok := graphs[currency]
+	if !ok {
+		graph = &revenueDashboardGraphData{
+			Recognized: make(map[time.Time]decimal.Decimal),
+			Invoiced:   make(map[time.Time]decimal.Decimal),
+			Paid:       make(map[time.Time]decimal.Decimal),
+		}
+		graphs[currency] = graph
+	}
+	return graph
+}
+
+func ensureRevenueDashboardRankingGroups(
+	groups map[string]*revenueDashboardRankingGroups,
+	currency string,
+) *revenueDashboardRankingGroups {
+	group, ok := groups[currency]
+	if !ok {
+		group = &revenueDashboardRankingGroups{
+			Apps:       make(map[string]*revenueDashboardAccumulator),
+			Users:      make(map[string]*revenueDashboardAccumulator),
+			Plans:      make(map[string]*revenueDashboardAccumulator),
+			Workspaces: make(map[string]*revenueDashboardAccumulator),
+		}
+		groups[currency] = group
+	}
+	return group
+}
+
+func addRevenueDashboardRanking(
+	rankings map[string]*revenueDashboardAccumulator,
+	id string,
+	label string,
+	value decimal.Decimal,
+) {
+	item, ok := rankings[id]
+	if !ok {
+		item = &revenueDashboardAccumulator{ID: id, Label: label}
+		rankings[id] = item
+	}
+	item.Value = item.Value.Add(value)
+}
+
+func topRevenueDashboardRankings(
+	rankings map[string]*revenueDashboardAccumulator,
+	limit int,
+) []dto.RevenueLeaderboardItem {
+	items := make([]dto.RevenueLeaderboardItem, 0, len(rankings))
+	for _, item := range rankings {
+		items = append(items, dto.RevenueLeaderboardItem{
+			ID:    item.ID,
+			Label: item.Label,
+			Value: item.Value,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Value.Equal(items[j].Value) {
+			return items[i].Label < items[j].Label
+		}
+		return items[i].Value.GreaterThan(items[j].Value)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	if items == nil {
+		return []dto.RevenueLeaderboardItem{}
+	}
+	return items
+}
+
+func revenueDashboardLineItemInPeriod(
+	lineItem *domaininvoice.InvoiceLineItem,
+	periodStart time.Time,
+	periodEnd time.Time,
+) bool {
+	if lineItem.PeriodStart == nil || lineItem.PeriodEnd == nil {
+		return false
+	}
+	return !lineItem.PeriodStart.Before(periodStart) && lineItem.PeriodEnd.Before(periodEnd)
+}
+
+func revenueDashboardBucketStart(t time.Time, windowSize types.WindowSize) time.Time {
+	t = t.UTC()
+	if windowSize == types.WindowSizeMonth {
+		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func buildRevenueDashboardGraphPointsForWindow(
+	agg map[time.Time]decimal.Decimal,
+	windowSize types.WindowSize,
+) []types.RevenueGraphPoint {
+	if len(agg) == 0 {
+		return []types.RevenueGraphPoint{}
+	}
+	keys := make([]time.Time, 0, len(agg))
+	for key := range agg {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Before(keys[j]) })
+
+	format := "2006-01-02"
+	if windowSize == types.WindowSizeMonth {
+		format = "2006-01"
+	}
+	points := make([]types.RevenueGraphPoint, 0, len(keys))
+	for _, key := range keys {
+		points = append(points, types.RevenueGraphPoint{
+			Label: key.Format(format),
+			Value: agg[key].String(),
+		})
+	}
+	return points
+}
+
+func addRevenueAgingAmount(
+	row *dto.RevenueAgingRow,
+	amount decimal.Decimal,
+	dueDate *time.Time,
+	asOf time.Time,
+) {
+	row.TotalOutstanding = row.TotalOutstanding.Add(amount)
+	if dueDate == nil || !dueDate.Before(asOf) {
+		row.Current = row.Current.Add(amount)
+		return
+	}
+	daysOverdue := int(math.Ceil(asOf.Sub(dueDate.UTC()).Hours() / 24))
+	switch {
+	case daysOverdue <= 30:
+		row.Days1To30 = row.Days1To30.Add(amount)
+	case daysOverdue <= 60:
+		row.Days31To60 = row.Days31To60.Add(amount)
+	case daysOverdue <= 90:
+		row.Days61To90 = row.Days61To90.Add(amount)
+	default:
+		row.Days91Plus = row.Days91Plus.Add(amount)
+	}
+}
+
+func revenueDashboardLineItemAttribution(
+	lineItem *domaininvoice.InvoiceLineItem,
+	plans map[string]revenueDashboardPlanInfo,
+) (string, string, string) {
+	planID := "unassigned"
+	planLabel := "Unassigned plan"
+	productKey := "unassigned"
+	if lineItem.EntityID != nil && strings.TrimSpace(*lineItem.EntityID) != "" {
+		planID = *lineItem.EntityID
+	}
+	if lineItem.PlanDisplayName != nil && strings.TrimSpace(*lineItem.PlanDisplayName) != "" {
+		planLabel = strings.TrimSpace(*lineItem.PlanDisplayName)
+	}
+	if plan, ok := plans[planID]; ok {
+		if strings.TrimSpace(plan.Name) != "" {
+			planLabel = strings.TrimSpace(plan.Name)
+		}
+		if plan.ProductKey != "" {
+			productKey = plan.ProductKey
+		}
+	}
+	return planID, planLabel, productKey
+}
+
+func revenueDashboardProductLabel(productKey string) string {
+	labels := map[string]string{
+		"iq":      "Plaqad IQ",
+		"suite":   "Plaqad Suite",
+		"pa":      "Plaqad PA",
+		"studio":  "Plaqad Studio",
+		"maestro": "Plaqad Studio Plus",
+		"os":      "Plaqad OS",
+		"talent":  "Plaqad Talent",
+		"intel":   "Plaqad Intel",
+		"spark":   "Plaqad Intel",
+	}
+	if label, ok := labels[strings.ToLower(productKey)]; ok {
+		return label
+	}
+	if productKey == "" || productKey == "unassigned" {
+		return "Unassigned app"
+	}
+	return productKey
+}
+
+func maskRevenueDashboardEmail(email string) string {
+	parts := strings.Split(strings.TrimSpace(email), "@")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return string([]rune(parts[0])[0]) + "•••@" + parts[1]
 }
 
 func aggregateRevenueDashboardByWindow(rows []domaininvoice.RevenueTimeSeriesRow) map[time.Time]decimal.Decimal {

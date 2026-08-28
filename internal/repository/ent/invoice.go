@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/flexprice/flexprice/ent"
@@ -1090,6 +1091,14 @@ func (o InvoiceQueryOptions) applyEntityQueryOptions(_ context.Context, f *types
 	var err error
 	if f == nil {
 		return query, nil
+	}
+
+	if search := strings.TrimSpace(f.Search); search != "" {
+		query = query.Where(invoice.Or(
+			invoice.InvoiceNumberContainsFold(search),
+			invoice.IdempotencyKeyContainsFold(search),
+			invoice.IDContainsFold(search),
+		))
 	}
 
 	// Apply entity-specific filters
