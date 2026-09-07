@@ -40,6 +40,24 @@ func TestOpenRouterLiveSmoke(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if fixture := os.Getenv("FLEXPRICE_AI_PRICING_FIXTURE"); fixture != "" {
+			data, err := os.ReadFile(fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req dto.ParseGeminiPricingRequest
+			if err := json.Unmarshal(data, &req); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := svc.ParsePricing(ctx, &req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(os.Getenv("FLEXPRICE_AI_PRICING_RESULT"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Log("Full dashboard pricing schema returned; no records created")
+		}
 		var result struct {
 			Plans []struct {
 				Name     string
