@@ -1,0 +1,246 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Flexprice API",
+    "description": "Flexprice API Service",
+    "contact": {
+      "name": "API Support"
+    },
+    "license": {
+      "name": "AGPL-3.0",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.html"
+    },
+    "version": "1.0"
+  },
+  "servers": [
+    {
+      "url": "https://us.api.flexprice.io/v1",
+      "description": "US Region"
+    },
+    {
+      "url": "https://api.cloud.flexprice.io/v1",
+      "description": "India Region"
+    }
+  ],
+  "paths": {
+    "/ai/assistant": {
+      "post": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Ask the dashboard assistant",
+        "operationId": "askDashboardAssistant",
+        "requestBody": {
+          "description": "Conversation",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/service.AssistantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service.AssistantResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-scope": "read",
+        "x-codegen-request-body-name": "request"
+      }
+    },
+    "/ai/pricing/parse": {
+      "post": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Preview pricing with OpenRouter",
+        "operationId": "parsePricing",
+        "requestBody": {
+          "description": "Pricing description and output schema",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParseGeminiPricingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "x-scope": "read",
+        "x-codegen-request-body-name": "request"
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ParseGeminiPricingRequest": {
+        "type": "object",
+        "properties": {
+          "responseSchema": {
+            "type": "object",
+            "properties": {}
+          },
+          "systemPrompt": {
+            "type": "string",
+            "example": "You are a pricing architect..."
+          },
+          "userPrompt": {
+            "type": "string",
+            "example": "Describe pricing for..."
+          }
+        }
+      },
+      "service.AIMessage": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "tool_call_id": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/service.AIToolCall"
+            }
+          }
+        }
+      },
+      "service.AIToolCall": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "object",
+            "properties": {
+              "arguments": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "service.AssistantRequest": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/service.AIMessage"
+            }
+          }
+        }
+      },
+      "service.AssistantResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/service.AssistantSource"
+            }
+          }
+        }
+      },
+      "service.AssistantSource": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "retrieved_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "description": "Enter your API key in the format *x-api-key &lt;api-key&gt;**",
+        "name": "x-api-key",
+        "in": "header"
+      }
+    }
+  }
+}

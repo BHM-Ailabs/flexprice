@@ -66,6 +66,7 @@ type Handlers struct {
 	// Portal handlers
 	Onboarding     *v1.OnboardingHandler
 	AIPricing      *v1.AIPricingHandler
+	AIAssistant    *v1.AIAssistantHandler
 	CustomerPortal *v1.CustomerPortalHandler
 }
 
@@ -599,8 +600,10 @@ func NewRouter(
 		// AI helpers (authenticated; same middleware as other /v1 private routes)
 		aiRoutes := v1Private.Group("/ai")
 		{
+			aiRoutes.POST("/assistant", read(types.EntityAI, types.ActionRead), handlers.AIAssistant.Chat)
 			aiPricing := aiRoutes.Group("/pricing")
 			{
+				aiPricing.POST("/parse", write(types.EntityAI, types.ActionWrite), handlers.AIAssistant.ParsePricing)
 				aiPricing.POST("/parse-gemini", write(types.EntityAI, types.ActionWrite), handlers.AIPricing.ParseGeminiPricing)
 			}
 		}

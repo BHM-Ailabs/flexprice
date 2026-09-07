@@ -71,6 +71,7 @@ type Configuration struct {
 	IntegrationEvents          IntegrationEventsConfig          `mapstructure:"integration_events" validate:"omitempty"`
 	OnboardingEvents           OnboardingEventsConfig           `mapstructure:"onboarding_events" validate:"omitempty"`
 	WebhookRetryJob            WebhookRetryJobConfig            `mapstructure:"webhook_retry_job" validate:"omitempty"`
+	OpenRouter                 OpenRouterConfig                 `mapstructure:"openrouter" validate:"omitempty"`
 	Gemini                     GeminiConfig                     `mapstructure:"gemini" validate:"omitempty"`
 	Whop                       WhopConfig                       `mapstructure:"whop" validate:"omitempty"`
 	Onboarding                 OnboardingConfig                 `mapstructure:"onboarding" validate:"omitempty"`
@@ -88,6 +89,11 @@ type WhopConfig struct {
 }
 
 // GeminiConfig holds Google Gemini API settings for server-side AI pricing parse (portal).
+type OpenRouterConfig struct {
+	APIKey string `mapstructure:"api_key"`
+	Model  string `mapstructure:"model"`
+}
+
 type GeminiConfig struct {
 	APIKey string `mapstructure:"api_key" validate:"omitempty"`
 	Model  string `mapstructure:"model" validate:"omitempty"`

@@ -255,6 +255,7 @@ func main() {
 			service.NewSecretService,
 			service.NewOnboardingService,
 			service.NewGeminiPricingService,
+			service.NewOpenRouterService,
 			service.NewBillingService,
 			service.NewCreditGrantService,
 			service.NewCostsheetService,
@@ -372,6 +373,7 @@ func provideHandlers(
 	meterUsageService service.MeterUsageService,
 	checkoutSessionService service.CheckoutSessionService,
 	geminiPricingService service.GeminiPricingService,
+	openRouterService *service.OpenRouterService,
 	webhookService *webhook.WebhookService,
 ) api.Handlers {
 	return api.Handlers{
@@ -400,6 +402,7 @@ func provideHandlers(
 		Tax:                      v1.NewTaxHandler(taxService, logger),
 		Onboarding:               v1.NewOnboardingHandler(onboardingService, logger),
 		AIPricing:                v1.NewAIPricingHandler(geminiPricingService, logger),
+		AIAssistant:              v1.NewAIAssistantHandler(openRouterService, cfg),
 		CreditGrant:              v1.NewCreditGrantHandler(creditGrantService, logger),
 		Costsheet:                v1.NewCostsheetHandler(costsheetService, logger),
 		RevenueAnalytics:         v1.NewRevenueAnalyticsHandler(revenueAnalyticsService, costsheetUsageTrackingService, cfg, logger),

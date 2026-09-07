@@ -197,6 +197,7 @@ func (s *PaymentService) ChargeSavedAuthorization(
 		// Paystack collected something other than what we asked for. Treat the outcome as
 		// unknown so nothing else is charged and the mismatch is settled out of band.
 		s.logger.Error(ctx, "charged Paystack amount or currency does not match the invoice",
+			"error", "charged Paystack amount or currency does not match the invoice",
 			"flexprice_payment_id", req.PaymentID,
 			"paystack_reference", transaction.Reference,
 			"charged_amount", transaction.Amount,
@@ -245,6 +246,7 @@ func (s *PaymentService) resolveAmbiguousCharge(
 	if verified.Status == transactionStatusSuccess {
 		if verified.Amount != amountMinor || !strings.EqualFold(verified.Currency, req.Currency) {
 			s.logger.Error(ctx, "verified Paystack charge does not match the requested amount",
+				"error", "verified Paystack charge does not match the requested amount",
 				"flexprice_payment_id", req.PaymentID,
 				"paystack_reference", reference,
 				"verified_amount", verified.Amount,

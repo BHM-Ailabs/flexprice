@@ -450,6 +450,7 @@ func (s *subscriptionPaymentProcessor) processPayment(
 			// wallet or other payment method may be used. The invoice stays unpaid until the
 			// gateway webhook or a reconciliation sweep settles the charge.
 			s.Logger.Error(ctx, "card charge outcome unknown, skipping wallet fallback",
+				"error", "card charge outcome unknown, skipping wallet fallback",
 				"subscription_id", sub.ID,
 				"invoice_id", inv.ID,
 				"attempted_card_amount", cardAmount,
@@ -875,6 +876,7 @@ func (s *subscriptionPaymentProcessor) processPaymentMethodCharge(
 	// payment processor): stop here rather than stacking another payment method on top.
 	if paymentResp.PaymentStatus == types.PaymentStatusProcessing {
 		s.Logger.Error(ctx, "card charge is still processing, no fallback will be attempted",
+			"error", "card charge is still processing, no fallback will be attempted",
 			"subscription_id", sub.ID,
 			"payment_id", paymentResp.ID,
 			"amount", amount,

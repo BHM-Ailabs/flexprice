@@ -557,3 +557,8 @@ checkout:
 
 onboarding:
   default_tenant_name: "Flexprice"
+
+# Server-only OpenRouter credentials. Never expose through VITE_* variables.
+openrouter:
+  api_key: ""
+  model: "google/gemini-2.5-flash"
