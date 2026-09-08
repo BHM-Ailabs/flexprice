@@ -127,7 +127,7 @@ func (s *OpenRouterService) complete(ctx context.Context, messages []AIMessage, 
 	}
 	req.Header.Set("Authorization", "Bearer "+s.cfg.OpenRouter.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Title", "FlexPrice Dashboard")
+	req.Header.Set("X-Title", "Plaqad BSP Dashboard")
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return AIMessage{}, aiError("OpenRouter could not be reached. Please retry.")
