@@ -99,3 +99,20 @@ Additional primary references:
 - [OpenRouter multimodal inputs](https://openrouter.ai/docs/guides/overview/multimodal/overview)
 - [OpenRouter video inputs](https://openrouter.ai/docs/guides/overview/multimodal/videos)
 - [OpenRouter PDF inputs](https://openrouter.ai/docs/guides/overview/multimodal/pdfs)
+
+### Production verification (2026-09-08)
+
+Railway source pins: backend `582a36a4a09df8e4205352244e98618b0bb215ed`, frontend
+`79be50bf0770b692221e2751b5e25771be99c816`, deployment repo `821aa3d`. Healthy deployments:
+API `73dc2064-9924-4b2e-bb2c-80213e2c9e05`, web `8260875b-d717-4800-9acb-037b2f0ff6c7`.
+Authenticated production requests passed for CSV pricing, scanned PDF, XLSX and short MP4, with
+file-source references and successful deletion checks; unauthenticated uploads returned 401.
+The first production video answer declined media analysis; a retry passed. The assistant policy was
+then clarified to explicitly include file-only/media analysis, and the opt-in live fixture test was
+strengthened to call the actual assistant and assert expected image/video evidence. It and the
+post-deployment video check passed.
+
+The signed-in real browser accepted a CSV with no prompt and rendered Attachment Demo at $37/month;
+Create was not invoked. Ask FlexPrice accepted a scanned PDF, completed OCR, correctly answered
+PLAQAD-7429 / 12 notebooks / 24 pencils, and showed filename and section sources. No billing records
+were created or modified by verification. Shared Docling recovery is documented separately above.
