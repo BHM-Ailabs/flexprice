@@ -90,8 +90,10 @@ type WhopConfig struct {
 
 // GeminiConfig holds Google Gemini API settings for server-side AI pricing parse (portal).
 type OpenRouterConfig struct {
-	APIKey string `mapstructure:"api_key"`
-	Model  string `mapstructure:"model"`
+	APIKey        string `mapstructure:"api_key"`
+	Model         string `mapstructure:"model"`
+	DoclingURL    string `mapstructure:"docling_url"`
+	DoclingAPIKey string `mapstructure:"docling_api_key"`
 }
 
 type GeminiConfig struct {

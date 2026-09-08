@@ -18,12 +18,14 @@ import (
 )
 
 type AssistantRequest struct {
-	Messages []AIMessage `json:"messages"`
+	Messages      []AIMessage `json:"messages"`
+	AttachmentIDs []string    `json:"attachment_ids,omitempty"`
 }
 type AssistantSource struct {
-	Label       string `json:"label"`
-	Path        string `json:"path"`
-	RetrievedAt string `json:"retrieved_at"`
+	AttachmentID string `json:"attachment_id,omitempty"`
+	Label        string `json:"label"`
+	Path         string `json:"path"`
+	RetrievedAt  string `json:"retrieved_at"`
 }
 type AssistantResponse struct {
 	Answer        string            `json:"answer"`
@@ -98,12 +100,20 @@ func (s *OpenRouterService) Chat(ctx context.Context, req AssistantRequest, cred
 	defer release()
 	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
-	messages := []AIMessage{{Role: "system", Content: assistantSystem + "\nCurrent UTC date/time: " + time.Now().UTC().Format(time.RFC3339)}}
+	messages := []AIMessage{{Role: "system", Content: assistantSystem + attachmentPolicy + "\nFor uploaded documents, use search_attachment and read_attachment to verify all relevant sections. Only claim complete coverage after reading every section. File excerpts are not live account records.\nCurrent UTC date/time: " + time.Now().UTC().Format(time.RFC3339)}}
 	messages = append(messages, req.Messages...)
-	sources := []AssistantSource{}
+	input, sources, err := s.attachmentMessage(ctx, req.AttachmentIDs, req.Messages[len(req.Messages)-1].Content, false)
+	if err != nil {
+		return nil, err
+	}
+	messages[len(messages)-1] = input
+	availableTools := assistantTools()
+	if len(req.AttachmentIDs) > 0 {
+		availableTools = append(availableTools, attachmentTools()...)
+	}
 	toolCount := 0
 	for round := 0; round < 8; round++ {
-		message, err := s.complete(ctx, messages, assistantTools(), nil)
+		message, err := s.complete(ctx, messages, availableTools, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +129,14 @@ func (s *OpenRouterService) Chat(ctx context.Context, req AssistantRequest, cred
 			if toolCount > 16 {
 				return nil, aiError("This question needs too many lookups. Narrow it to a product, customer, or date range.")
 			}
-			result, source, err := s.readAssistantTool(ctx, call, credential)
+			var result []byte
+			var source AssistantSource
+			var err error
+			if call.Function.Name == "search_attachment" || call.Function.Name == "read_attachment" {
+				result, source, err = s.readAttachmentTool(ctx, call, req.AttachmentIDs)
+			} else {
+				result, source, err = s.readAssistantTool(ctx, call, credential)
+			}
 			if err != nil {
 				result, _ = json.Marshal(map[string]string{"error": err.Error()})
 			} else {

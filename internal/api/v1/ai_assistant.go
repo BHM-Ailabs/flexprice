@@ -45,7 +45,8 @@ func (h *AIAssistantHandler) Chat(c *gin.Context) {
 	if key := c.GetHeader(h.cfg.Auth.APIKey.Header); key != "" {
 		credential.Set(h.cfg.Auth.APIKey.Header, key)
 	}
-	result, err := h.ai.Chat(c.Request.Context(), req, credential)
+	ctx := service.WithAIAttachmentPrincipal(c.Request.Context(), c.GetHeader(h.cfg.Auth.APIKey.Header))
+	result, err := h.ai.Chat(ctx, req, credential)
 	if err != nil {
 		c.Error(err)
 		return
@@ -67,7 +68,10 @@ func (h *AIAssistantHandler) Chat(c *gin.Context) {
 // @Router /ai/pricing/parse [post]
 func (h *AIAssistantHandler) ParsePricing(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 96*1024)
-	var req dto.ParseGeminiPricingRequest
+	var req struct {
+		dto.ParseGeminiPricingRequest
+		AttachmentIDs []string `json:"attachment_ids,omitempty"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.Error(ierr.NewError("Invalid pricing request").WithHint("Invalid pricing request").Mark(ierr.ErrValidation))
 		return
@@ -76,7 +80,8 @@ func (h *AIAssistantHandler) ParsePricing(c *gin.Context) {
 		c.Error(err)
 		return
 	}
-	result, err := h.ai.ParsePricing(c.Request.Context(), &req)
+	ctx := service.WithAIAttachmentPrincipal(c.Request.Context(), c.GetHeader(h.cfg.Auth.APIKey.Header))
+	result, err := h.ai.ParsePricing(ctx, &req.ParseGeminiPricingRequest, req.AttachmentIDs...)
 	if err != nil {
 		c.Error(err)
 		return

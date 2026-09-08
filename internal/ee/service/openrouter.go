@@ -22,7 +22,20 @@ type AIMessage struct {
 	Content    string       `json:"content,omitempty"`
 	ToolCalls  []AIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string       `json:"tool_call_id,omitempty"`
+	parts      []any        // Server-built multimodal content; never accepted from clients.
 }
+
+func (m AIMessage) MarshalJSON() ([]byte, error) {
+	type plain AIMessage
+	if len(m.parts) == 0 {
+		return json.Marshal(plain(m))
+	}
+	return json.Marshal(struct {
+		Role    string `json:"role"`
+		Content []any  `json:"content"`
+	}{m.Role, m.parts})
+}
+
 type AIToolCall struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`
@@ -50,15 +63,19 @@ type AICompletion struct {
 // OpenRouterService keeps credentials server-side; the assistant's data reader
 // forwards the current session only to this API's loopback listener.
 type OpenRouterService struct {
-	cfg    *config.Configuration
-	client *http.Client
-	mu     sync.Mutex
-	active map[string]int
-	total  int
+	documentSlots chan struct{}
+	cfg           *config.Configuration
+	client        *http.Client
+	mu            sync.Mutex
+	active        map[string]int
+	total         int
+	filesMu       sync.Mutex
+	files         map[string]*aiAttachment
+	uploads       chan struct{}
 }
 
 func NewOpenRouterService(cfg *config.Configuration) *OpenRouterService {
-	return &OpenRouterService{cfg: cfg, client: &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, active: map[string]int{}}
+	return &OpenRouterService{cfg: cfg, client: &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, active: map[string]int{}, files: map[string]*aiAttachment{}, uploads: make(chan struct{}, 2), documentSlots: make(chan struct{}, 4)}
 }
 func aiError(message string) error {
 	return ierr.NewError(message).WithHint(message).Mark(ierr.ErrServiceUnavailable)
@@ -162,7 +179,7 @@ func jsonSchema(value any) any {
 		return value
 	}
 }
-func (s *OpenRouterService) ParsePricing(ctx context.Context, req *dto.ParseGeminiPricingRequest) (json.RawMessage, error) {
+func (s *OpenRouterService) ParsePricing(ctx context.Context, req *dto.ParseGeminiPricingRequest, attachmentIDs ...string) (json.RawMessage, error) {
 	release, err := s.acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -174,7 +191,11 @@ func (s *OpenRouterService) ParsePricing(ctx context.Context, req *dto.ParseGemi
 	if json.Unmarshal(req.ResponseSchema, &schema) != nil || schema == nil {
 		return nil, aiError("Invalid pricing response schema.")
 	}
-	message, err := s.complete(ctx, []AIMessage{{Role: "system", Content: req.SystemPrompt}, {Role: "user", Content: req.UserPrompt}}, nil, map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "pricing", "schema": jsonSchema(schema)}})
+	input, _, err := s.attachmentMessage(ctx, attachmentIDs, req.UserPrompt, true)
+	if err != nil {
+		return nil, err
+	}
+	message, err := s.complete(ctx, []AIMessage{{Role: "system", Content: req.SystemPrompt + attachmentPolicy}, input}, nil, map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "pricing", "schema": jsonSchema(schema)}})
 	if err != nil {
 		return nil, err
 	}

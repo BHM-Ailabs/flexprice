@@ -127,6 +127,92 @@
         "x-scope": "read",
         "x-codegen-request-body-name": "request"
       }
+    },
+    "/ai/attachments": {
+      "post": {
+        "operationId": "uploadAIAttachment",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service.AIAttachmentInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/attachments/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAIAttachment",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/service.AIAttachmentInfo"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAIAttachment",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -198,6 +284,13 @@
             "items": {
               "$ref": "#/components/schemas/service.AIMessage"
             }
+          },
+          "attachment_ids": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -230,6 +323,46 @@
           "retrieved_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "attachment_id": {
+            "type": "string"
+          }
+        }
+      },
+      "service.AIAttachmentInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "size",
+          "status",
+          "expires_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "sections": {
+            "type": "integer"
           }
         }
       }

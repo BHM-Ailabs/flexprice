@@ -45,3 +45,57 @@ The dedicated OpenRouter key has a $20 total usage limit and no automatic reset.
 - [FlexPrice API introduction](https://docs.flexprice.io/api-reference/introduction) and [official MCP server](https://github.com/flexprice/mcp-server): existing API/tool coverage for billing entities.
 
 The checked-out application source and the deployed read APIs remain the authority for this customized FlexPrice instance.
+
+## File attachments — 2026-09-08
+
+Both the pricing creator and assistant accept PDF (including scanned/image-only PDF), DOCX, XLSX,
+PPTX, PNG/JPEG, UTF-8 TXT/Markdown/CSV/TSV/JSON, and MP4/MOV/WebM clips. The dashboard supports
+file selection and dropping files, per-file progress/failure states, removal, and file-only questions.
+A template with attachments uses the model rather than silently bypassing attached evidence.
+
+Documents upload as bytes to the existing authenticated Plaqad Docling Railway service; no remote source
+URLs or browser credentials are passed. OCR remains enabled, tables are retained in Markdown, and partial
+conversion results are rejected. Images and short videos go as private base64 multimodal inputs to the
+existing OpenRouter model so visual information remains available. Video duration/resolution are checked
+server-side using ffprobe; the API image now includes ffmpeg. Legacy binary Office files must be exported
+to DOCX/XLSX/PPTX. Spreadsheet formulas are not executed or recalculated by this integration.
+
+The assistant receives a manifest and initial excerpt, with `search_attachment` over the complete extracted
+text and `read_attachment` for numbered sections. Search includes overlap at section boundaries and Unicode
+case handling. Source labels identify filenames/sections. It must distinguish uploaded proposals from live
+billing facts and cannot claim complete coverage from a partial read. This is bounded retrieval, not a lossy
+model-generated summary. Pricing sends all extracted content up to its explicit limit and otherwise asks for
+relevant pages/sheets, rather than silently discarding later pricing terms.
+
+Limits: 4 attached files, 20 MiB/file, 24 MiB total; UTF-8 text and extracted text up to 2 MiB; native images up
+to 20 megapixels; videos up to 60 seconds and 4K. Docling retains its 100-page service limit. Pricing accepts
+120,000 extracted bytes across documents. Existing model round/tool-call limits remain. Upload concurrency
+is 2 per API process; document conversions have 4 reserved slots (released on terminal status or after 35
+minutes, including removed pending files); the registry admits 8 files per owner, 64 total, and reserves at
+most 256 MiB using original size plus a fixed extraction allowance. Requests and results are size bounded.
+
+Attachments are temporary working context: memory-only in the single API process, private to authenticated
+tenant + environment + user (API keys use separate hashed principals), expiring after one hour. Unmount/new
+chat/removal requests delete local working files; service restarts require reattachment. This is not a durable
+upload library or a multi-replica attachment store. Docling jobs/results use the separate service's ephemeral
+retention: single-use results with a five-minute removal delay. Removing a file does not cancel a Docling job
+already submitted. Keys stay in API runtime variables `FLEXPRICE_OPENROUTER_DOCLING_API_KEY` and
+`FLEXPRICE_OPENROUTER_API_KEY`; the origin is `FLEXPRICE_OPENROUTER_DOCLING_URL`.
+
+Security checks cover cross-user/environment/tenant access, expiry, forged multimodal messages, unknown
+file types/signatures, OOXML expansion limits, invalid UTF-8, redirect refusal, partial conversion failure,
+late-document and cross-section evidence, and video duration. The frontend validates selection limits before
+uploading. Go race tests, compilation, loglint, frontend tests/build and targeted ESLint pass. Live synthetic
+conversion tests passed for XLSX/PPTX/PDF/DOCX, scanned PDF, native PNG and a two-second MP4. A CSV
+attachment generated an Attachment Demo plan at USD 37/month without creating billing records.
+
+The initial live probe discovered the shared Docling deployment had already reached CRASHED status;
+its last logs stopped during a prior document conversion, without an explicit cause. Redeployed the same
+existing image as `b4231422-fd83-472f-a448-c51b8d9c0bce` with unchanged resource limits, then all fixtures
+passed. The shared pilot's availability and ephemeral state remain operational dependencies.
+
+Additional primary references:
+- [Docling supported formats](https://docling-project.github.io/docling/usage/supported_formats/)
+- [OpenRouter multimodal inputs](https://openrouter.ai/docs/guides/overview/multimodal/overview)
+- [OpenRouter video inputs](https://openrouter.ai/docs/guides/overview/multimodal/videos)
+- [OpenRouter PDF inputs](https://openrouter.ai/docs/guides/overview/multimodal/pdfs)

@@ -600,6 +600,9 @@ func NewRouter(
 		// AI helpers (authenticated; same middleware as other /v1 private routes)
 		aiRoutes := v1Private.Group("/ai")
 		{
+			aiRoutes.POST("/attachments", read(types.EntityAI, types.ActionRead), handlers.AIAssistant.UploadAttachment)
+			aiRoutes.GET("/attachments/:id", read(types.EntityAI, types.ActionRead), handlers.AIAssistant.AttachmentStatus)
+			aiRoutes.DELETE("/attachments/:id", read(types.EntityAI, types.ActionRead), handlers.AIAssistant.DeleteAttachment)
 			aiRoutes.POST("/assistant", read(types.EntityAI, types.ActionRead), handlers.AIAssistant.Chat)
 			aiPricing := aiRoutes.Group("/pricing")
 			{
