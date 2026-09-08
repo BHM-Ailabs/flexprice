@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -48,15 +47,18 @@ func TestAIAttachmentsLive(t *testing.T) {
 			}
 			t.Logf("Converted %s: %s, %d sections", info.Name, info.Kind, info.Sections)
 			if info.Kind == "image" || info.Kind == "video" {
-				input, _, err := s.attachmentMessage(ctx, []string{info.ID}, "Describe the visible text or color in this file. Be specific.", false)
+				answer, err := s.Chat(ctx, AssistantRequest{Messages: []AIMessage{{Role: "user", Content: "Describe the visible text or color in this file. Be specific."}}, AttachmentIDs: []string{info.ID}}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				answer, err := s.complete(context.Background(), []AIMessage{{Role: "system", Content: "Read this synthetic media fixture. " + attachmentPolicy}, input}, nil, nil)
-				if err != nil {
-					t.Fatal(err)
+				expected := "PLAQAD-7429"
+				if info.Kind == "video" {
+					expected = "blue"
 				}
-				t.Log("Media answer:", answer.Content)
+				if !strings.Contains(strings.ToLower(answer.Answer), strings.ToLower(expected)) {
+					t.Fatalf("media evidence missing: %s", answer.Answer)
+				}
+				t.Log("Media answer:", answer.Answer)
 			} else {
 				f, _ := s.findAttachment(ctx, info.ID)
 				if !strings.Contains(f.text, "Notebook") && !strings.Contains(f.text, "PLAQAD-7429") {
