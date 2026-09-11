@@ -139,6 +139,9 @@ func TenantContextMiddleware(c *gin.Context) {
 		if userID != "" {
 			attrs = append(attrs, attribute.String("app.user_id", userID))
 		}
+		if actorID := types.GetPlaqadUserID(ctx); actorID != "" {
+			attrs = append(attrs, attribute.String("app.plaqad_user_id", actorID))
+		}
 		if len(attrs) > 0 {
 			span.SetAttributes(attrs...)
 		}

@@ -211,6 +211,9 @@ type PlaqadAuthConfig struct {
 	TenantID       string `mapstructure:"tenant_id"`
 	UserID         string `mapstructure:"user_id"`
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+	// AllowedUserIDs limits human access to exact central Plaqad user IDs.
+	// An omitted/empty list preserves the existing all-Super-Admins behavior.
+	AllowedUserIDs []string `mapstructure:"allowed_user_ids"`
 }
 
 type SupabaseConfig struct {

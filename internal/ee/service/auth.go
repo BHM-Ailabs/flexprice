@@ -188,6 +188,11 @@ func (s *authService) Login(ctx context.Context, req *dto.LoginRequest) (*dto.Au
 func (s *authService) ExchangePlaqadCode(ctx context.Context, req *dto.PlaqadCallbackRequest) (*dto.PlaqadCallbackResponse, error) {
 	result, err := authProvider.ExchangePlaqadCode(ctx, s.Config.Auth.Plaqad, req.Code, req.CodeVerifier)
 	if err != nil {
+		if errors.Is(err, authProvider.ErrPlaqadForbidden) {
+			return nil, ierr.WithError(err).
+				WithHint("This Plaqad account is not authorized for this dashboard").
+				Mark(ierr.ErrPermissionDenied)
+		}
 		if errors.Is(err, authProvider.ErrPlaqadUnauthorized) {
 			return nil, ierr.WithError(err).
 				WithHint("The Plaqad authorization code is invalid or expired").

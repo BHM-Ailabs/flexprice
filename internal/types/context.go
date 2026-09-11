@@ -13,6 +13,7 @@ const (
 	CtxRequestID     ContextKey = "ctx_request_id"
 	CtxTenantID      ContextKey = "ctx_tenant_id"
 	CtxUserID        ContextKey = "ctx_user_id"
+	CtxPlaqadUserID  ContextKey = "ctx_plaqad_user_id"
 	CtxJWT           ContextKey = "ctx_jwt"
 	CtxEnvironmentID ContextKey = "ctx_environment_id"
 	CtxDBTransaction ContextKey = "ctx_db_transaction"
@@ -40,6 +41,13 @@ func GetUserID(ctx context.Context) string {
 		return userID
 	}
 	return ""
+}
+
+// GetPlaqadUserID identifies the verified central human actor. The separate
+// native user ID remains the tenant-scoped principal used for data access.
+func GetPlaqadUserID(ctx context.Context) string {
+	userID, _ := ctx.Value(CtxPlaqadUserID).(string)
+	return userID
 }
 
 func GetTenantID(ctx context.Context) string {

@@ -15,11 +15,23 @@ import (
 
 var (
 	ErrPlaqadUnauthorized = errors.New("plaqad token is unauthorized")
-	ErrPlaqadForbidden    = errors.New("plaqad user is not a super admin")
+	ErrPlaqadForbidden    = errors.New("plaqad user is not authorized for this dashboard")
 	ErrPlaqadUnavailable  = errors.New("plaqad authorization is unavailable")
 )
 
 const maxPlaqadAdminResponseBytes = 1 << 20
+
+func plaqadUserAllowed(cfg config.PlaqadAuthConfig, userID string) bool {
+	if len(cfg.AllowedUserIDs) == 0 {
+		return true
+	}
+	for _, allowed := range cfg.AllowedUserIDs {
+		if trimmed := strings.TrimSpace(allowed); trimmed != "" && trimmed == userID {
+			return true
+		}
+	}
+	return false
+}
 
 type PlaqadAdminIdentity struct {
 	ID      string
@@ -108,7 +120,7 @@ func VerifyPlaqadSuperAdmin(ctx context.Context, cfg config.PlaqadAuthConfig, to
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, fmt.Errorf("%w: decode admin response: %v", ErrPlaqadUnavailable, err)
 	}
-	if payload.User.ID == "" || !payload.User.IsAdmin {
+	if payload.User.ID == "" || !payload.User.IsAdmin || !plaqadUserAllowed(cfg, payload.User.ID) {
 		return nil, ErrPlaqadForbidden
 	}
 
@@ -180,6 +192,9 @@ func ExchangePlaqadCode(ctx context.Context, cfg config.PlaqadAuthConfig, code, 
 	}
 	if result.Token == "" || result.User.ID == "" {
 		return nil, fmt.Errorf("%w: incomplete token response", ErrPlaqadUnavailable)
+	}
+	if !plaqadUserAllowed(cfg, result.User.ID) {
+		return nil, ErrPlaqadForbidden
 	}
 	return &result, nil
 }

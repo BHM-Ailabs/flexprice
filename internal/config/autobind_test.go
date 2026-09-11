@@ -1,10 +1,22 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/flexprice/flexprice/internal/types"
 )
+
+func TestPlaqadAllowlistEnvironmentBinding(t *testing.T) {
+	t.Setenv("FLEXPRICE_AUTH_PLAQAD_ALLOWED_USER_IDS", "central-operator,second-operator")
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.Auth.Plaqad.AllowedUserIDs, []string{"central-operator", "second-operator"}) {
+		t.Fatalf("allowlist env was not decoded: %#v", cfg.Auth.Plaqad.AllowedUserIDs)
+	}
+}
 
 // TestAutoBindEnvCategories proves that the reflective bindEnvs registration makes every
 // category of config key resolvable from its FLEXPRICE_* env var via NewConfig — including

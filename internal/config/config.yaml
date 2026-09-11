@@ -31,6 +31,9 @@ auth:
     tenant_id: ""
     user_id: ""
     timeout_seconds: 5
+    # Comma-separated FLEXPRICE_AUTH_PLAQAD_ALLOWED_USER_IDS restricts central
+    # Super Admins to explicitly approved operators. Empty preserves legacy scope.
+    allowed_user_ids: []
 
 kafka:
   brokers: "localhost:29092" # For local mode

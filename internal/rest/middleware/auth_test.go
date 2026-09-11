@@ -654,6 +654,7 @@ func TestAuthenticateMiddleware_ConfigAPIKeyIsSuperAdmin(t *testing.T) {
 		Auth: config.AuthConfig{
 			Provider: types.AuthProviderFlexprice,
 			Secret:   testSecret,
+			Plaqad:   config.PlaqadAuthConfig{Enabled: true, AllowedUserIDs: []string{"central-operator"}},
 			APIKey: config.APIKeyConfig{
 				Header: "x-api-key",
 				Keys: map[string]config.APIKeyDetails{
@@ -712,7 +713,7 @@ func TestAuthenticateMiddleware_PlaqadSuperAdminAuthority(t *testing.T) {
 		}
 	}
 
-	newRouter := func(baseURL string, mapped *user.User) *gin.Engine {
+	newRouter := func(baseURL string, mapped *user.User, allowedIDs ...string) *gin.Engine {
 		cfg := &config.Configuration{
 			Auth: config.AuthConfig{
 				Provider: types.AuthProviderFlexprice,
@@ -724,6 +725,7 @@ func TestAuthenticateMiddleware_PlaqadSuperAdminAuthority(t *testing.T) {
 					TenantID:       "t_plaqad",
 					UserID:         "usr_flexprice_dashboard",
 					TimeoutSeconds: 2,
+					AllowedUserIDs: allowedIDs,
 				},
 			},
 		}
@@ -741,9 +743,10 @@ func TestAuthenticateMiddleware_PlaqadSuperAdminAuthority(t *testing.T) {
 		}, users, newTestLogger(t)))
 		r.GET("/test", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
-				"tenant_id": types.GetTenantID(c.Request.Context()),
-				"user_id":   types.GetUserID(c.Request.Context()),
-				"roles":     types.GetRoles(c.Request.Context()),
+				"tenant_id":      types.GetTenantID(c.Request.Context()),
+				"user_id":        types.GetUserID(c.Request.Context()),
+				"roles":          types.GetRoles(c.Request.Context()),
+				"plaqad_user_id": types.GetPlaqadUserID(c.Request.Context()),
 			})
 		})
 		return r
@@ -765,7 +768,14 @@ func TestAuthenticateMiddleware_PlaqadSuperAdminAuthority(t *testing.T) {
 		w := do(newRouter(server.URL, mappedUser(types.StatusPublished, []string{types.RoleSuperAdmin.String()})), "plaqad-admin-token")
 
 		require.Equal(t, http.StatusOK, w.Code)
-		assert.JSONEq(t, `{"tenant_id":"t_plaqad","user_id":"usr_flexprice_dashboard","roles":["super_admin"]}`, w.Body.String())
+		assert.JSONEq(t, `{"tenant_id":"t_plaqad","user_id":"usr_flexprice_dashboard","roles":["super_admin"],"plaqad_user_id":"plaqad-admin"}`, w.Body.String())
+	})
+
+	t.Run("rejects a live super admin outside the configured operator scope", func(t *testing.T) {
+		server := newPlaqadServer(http.StatusOK, `{"user":{"id":"plaqad-admin","isAdmin":true}}`)
+		defer server.Close()
+		w := do(newRouter(server.URL, mappedUser(types.StatusPublished, []string{types.RoleSuperAdmin.String()}), "different-admin"), "plaqad-admin-token")
+		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 
 	t.Run("rejects a token when Plaqad says the caller is not an admin", func(t *testing.T) {

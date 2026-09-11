@@ -292,6 +292,7 @@ func AuthenticateMiddleware(cfg *config.Configuration, secretService service.Sec
 				abortEnvironmentResolution(c, logger, err, cfg.Auth.Plaqad.TenantID, cfg.Auth.Plaqad.UserID)
 				return
 			}
+			c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), types.CtxPlaqadUserID, identity.ID))
 			c.Next()
 			return
 		}

@@ -353,6 +353,9 @@ func (l *Logger) WithContext(ctx context.Context) *Logger {
 		"user_id", types.GetUserID(ctx),
 		"environment_id", types.GetEnvironmentID(ctx),
 	}
+	if actorID := types.GetPlaqadUserID(ctx); actorID != "" {
+		fields = append(fields, "plaqad_user_id", actorID)
+	}
 
 	sc := trace.SpanFromContext(ctx).SpanContext()
 	if sc.IsValid() {
