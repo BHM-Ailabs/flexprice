@@ -27,10 +27,25 @@ func TestSubscriptionCardDescriptorNeverExposesAuthorization(t *testing.T) {
 	require.Equal(t, "AUTH_test_secret", *sub.GatewayPaymentMethodID)
 	delete(sub.Metadata, "paystack_save_card_consent")
 	ready, card := subscriptionCardDescriptor(sub)
-	require.False(t, ready)
+	require.Equal(t, lo.ToPtr(false), ready)
 	require.Nil(t, card)
 	sub.GatewayPaymentMethodID = lo.ToPtr("pm_unverified_stripe")
 	ready, card = subscriptionCardDescriptor(sub)
-	require.False(t, ready)
+	require.Nil(t, ready)
 	require.Nil(t, card)
+}
+
+func TestSubscriptionCardReadinessUnknownWithoutSupportedLocalEvidence(t *testing.T) {
+	for _, sub := range []*subscription.Subscription{nil, {}, {GatewayPaymentMethodID: lo.ToPtr("pm_saved_on_stripe")}} {
+		for _, response := range []any{SubscriptionResponse{Subscription: sub}, SubscriptionResponseV2{Subscription: sub}} {
+			raw, err := json.Marshal(response)
+			require.NoError(t, err)
+			var data map[string]any
+			require.NoError(t, json.Unmarshal(raw, &data))
+			value, exists := data["payment_method_ready"]
+			require.True(t, exists)
+			require.Nil(t, value)
+			require.Nil(t, data["payment_method"])
+		}
+	}
 }

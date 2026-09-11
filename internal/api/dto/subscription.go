@@ -794,7 +794,7 @@ func (r *ActivateDraftSubscriptionRequest) Validate() error {
 }
 
 type SubscriptionResponse struct {
-	PaymentMethodReady bool                        `json:"payment_method_ready"`
+	PaymentMethodReady *bool                       `json:"payment_method_ready"`
 	PaymentMethod      *SubscriptionCardDescriptor `json:"payment_method"`
 	*subscription.Subscription
 	Plan     *PlanResponse     `json:"plan"`
@@ -847,7 +847,7 @@ type ListSubscriptionsResponse = types.ListResponse[*SubscriptionResponse] // @n
 // SubscriptionResponseV2 represents the V2 response for a subscription
 // with optional expanded fields based on the request expand parameter
 type SubscriptionResponseV2 struct {
-	PaymentMethodReady bool                        `json:"payment_method_ready"`
+	PaymentMethodReady *bool                       `json:"payment_method_ready"`
 	PaymentMethod      *SubscriptionCardDescriptor `json:"payment_method"`
 	*subscription.Subscription
 
@@ -2124,9 +2124,14 @@ type SubscriptionCardDescriptor struct {
 	ExpiryYear  *string `json:"expiry_year"`
 }
 
-func subscriptionCardDescriptor(sub *subscription.Subscription) (bool, *SubscriptionCardDescriptor) {
-	if sub == nil || !types.IsPaystackAuthorizationCode(lo.FromPtr(sub.GatewayPaymentMethodID)) || sub.Metadata["paystack_save_card_consent"] != "true" || sub.Metadata["paystack_customer_email"] == "" || sub.BillingCadence != types.BILLING_CADENCE_RECURRING || sub.BillingPeriod == types.BILLING_PERIOD_ONETIME {
-		return false, nil
+func subscriptionCardDescriptor(sub *subscription.Subscription) (*bool, *SubscriptionCardDescriptor) {
+	// Stripe may collect against a customer-default method outside this local
+	// subscription projection. Absence of Paystack evidence is unknown, not false.
+	if sub == nil || !types.IsPaystackAuthorizationCode(lo.FromPtr(sub.GatewayPaymentMethodID)) {
+		return nil, nil
+	}
+	if sub.Metadata["paystack_save_card_consent"] != "true" || sub.Metadata["paystack_customer_email"] == "" || sub.BillingCadence != types.BILLING_CADENCE_RECURRING || sub.BillingPeriod == types.BILLING_PERIOD_ONETIME {
+		return lo.ToPtr(false), nil
 	}
 	bounded := func(value string, max int) *string {
 		value = strings.TrimSpace(value)
@@ -2139,5 +2144,5 @@ func subscriptionCardDescriptor(sub *subscription.Subscription) (bool, *Subscrip
 	if len(last4) != 4 || strings.IndexFunc(last4, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
 		last4 = ""
 	}
-	return true, &SubscriptionCardDescriptor{Type: "card", Brand: bounded(sub.Metadata["paystack_card_type"], 32), Last4: bounded(last4, 4), ExpiryMonth: bounded(sub.Metadata["paystack_card_exp_month"], 2), ExpiryYear: bounded(sub.Metadata["paystack_card_exp_year"], 4)}
+	return lo.ToPtr(true), &SubscriptionCardDescriptor{Type: "card", Brand: bounded(sub.Metadata["paystack_card_type"], 32), Last4: bounded(last4, 4), ExpiryMonth: bounded(sub.Metadata["paystack_card_exp_month"], 2), ExpiryYear: bounded(sub.Metadata["paystack_card_exp_year"], 4)}
 }
