@@ -260,6 +260,11 @@ func (s *PaymentService) CreatePaymentLink(ctx context.Context, req *dto.CreateS
 			Mark(ierr.ErrValidation)
 	}
 
+	// A conflicting reservation may be readable for support but cannot start a new checkout.
+	if invoiceResp.PublicReference != nil && *invoiceResp.PublicReference == "" {
+		return nil, ierr.NewError("invoice public reference is unavailable").Mark(ierr.ErrValidation)
+	}
+
 	// Ensure customer is synced to Stripe before creating payment link
 	customerResp, err := s.customerSvc.EnsureCustomerSyncedToStripe(ctx, req.CustomerID, customerService)
 	if err != nil {
@@ -292,7 +297,8 @@ func (s *PaymentService) CreatePaymentLink(ctx context.Context, req *dto.CreateS
 	var descriptionParts []string
 
 	// Add invoice information
-	invoiceInfo := fmt.Sprintf("Invoice: %s", lo.FromPtrOr(invoiceResp.InvoiceNumber, req.InvoiceID))
+	number := lo.FromPtrOr(invoiceResp.PublicReference, lo.FromPtrOr(invoiceResp.InvoiceNumber, req.InvoiceID))
+	invoiceInfo := fmt.Sprintf("Invoice: %s", number)
 	descriptionParts = append(descriptionParts, invoiceInfo)
 
 	// Add invoice total

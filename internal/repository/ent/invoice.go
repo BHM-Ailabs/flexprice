@@ -25,23 +25,36 @@ import (
 )
 
 type invoiceRepository struct {
-	client     postgres.IClient
-	logger     *logger.Logger
-	queryOpts  InvoiceQueryOptions
-	redisCache cache.RedisCache
+	client            postgres.IClient
+	logger            *logger.Logger
+	queryOpts         InvoiceQueryOptions
+	redisCache        cache.RedisCache
+	referenceTenantID string
 }
 
-func NewInvoiceRepository(client postgres.IClient, logger *logger.Logger, redisCache cache.RedisCache) domainInvoice.Repository {
+func NewInvoiceRepository(client postgres.IClient, logger *logger.Logger, redisCache cache.RedisCache, referenceTenantID ...string) domainInvoice.Repository {
+	tenant := ""
+	if len(referenceTenantID) > 0 {
+		tenant = referenceTenantID[0]
+	}
 	return &invoiceRepository{
-		client:     client,
-		logger:     logger,
-		queryOpts:  InvoiceQueryOptions{},
-		redisCache: redisCache,
+		client:            client,
+		logger:            logger,
+		queryOpts:         InvoiceQueryOptions{},
+		redisCache:        redisCache,
+		referenceTenantID: tenant,
 	}
 }
 
-// Create creates a new invoice (non-transactional)
+// Create keeps the invoice insert and its public reference in the same transaction.
 func (r *invoiceRepository) Create(ctx context.Context, inv *domainInvoice.Invoice) error {
+	if r.referencesEnabled(ctx) {
+		return r.client.WithTx(ctx, func(tx context.Context) error { return r.create(tx, inv) })
+	}
+	return r.create(ctx, inv)
+}
+
+func (r *invoiceRepository) create(ctx context.Context, inv *domainInvoice.Invoice) error {
 	client := r.client.Writer(ctx)
 
 	// Start a span for this repository operation
@@ -138,7 +151,11 @@ func (r *invoiceRepository) Create(ctx context.Context, inv *domainInvoice.Invoi
 		return ierr.WithError(err).WithHint("invoice creation failed").Mark(ierr.ErrDatabase)
 	}
 
-	*inv = *domainInvoice.FromEnt(invoice)
+	materialized, err := r.materializeReferenceStrict(ctx, domainInvoice.FromEnt(invoice))
+	if err != nil {
+		return err
+	}
+	*inv = *materialized
 	return nil
 }
 
@@ -427,7 +444,7 @@ func (r *invoiceRepository) Get(ctx context.Context, id string) (*domainInvoice.
 	defer FinishSpan(span)
 
 	// Try to get from cache first
-	if cachedInvoice := r.GetCache(ctx, id); cachedInvoice != nil {
+	if cachedInvoice := r.GetCache(ctx, id); cachedInvoice != nil && !r.referencesEnabled(ctx) {
 		return cachedInvoice, nil
 	}
 
@@ -463,7 +480,7 @@ func (r *invoiceRepository) Get(ctx context.Context, id string) (*domainInvoice.
 	}
 	invoiceData.LineItems = items
 	r.SetCache(ctx, invoiceData)
-	return invoiceData, nil
+	return r.materializeReference(ctx, invoiceData)
 }
 
 // GetForUpdate retrieves an invoice with a row-level lock (SELECT FOR UPDATE).
@@ -722,7 +739,10 @@ func (r *invoiceRepository) List(ctx context.Context, filter *types.InvoiceFilte
 	// Convert to domain model
 	result := make([]*domainInvoice.Invoice, len(invoices))
 	for i, inv := range invoices {
-		result[i] = domainInvoice.FromEnt(inv)
+		result[i], err = r.materializeReference(ctx, domainInvoice.FromEnt(inv))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return result, nil
@@ -773,6 +793,7 @@ func (r *invoiceRepository) ListAllTenant(ctx context.Context, filter *types.Inv
 
 	result := make([]*domainInvoice.Invoice, len(invoices))
 	for i, inv := range invoices {
+		// Cross-scope scheduled jobs establish tenant/environment before normal Get.
 		result[i] = domainInvoice.FromEnt(inv)
 	}
 
@@ -830,7 +851,7 @@ func (r *invoiceRepository) GetByIdempotencyKey(ctx context.Context, key string)
 		return nil, ierr.WithError(err).WithHint("failed to get invoice by idempotency key").Mark(ierr.ErrDatabase)
 	}
 
-	return domainInvoice.FromEnt(inv), nil
+	return r.materializeReference(ctx, domainInvoice.FromEnt(inv))
 }
 
 func (r *invoiceRepository) ExistsForPeriod(ctx context.Context, subscriptionID string, periodStart, periodEnd time.Time, billingReason string) (bool, error) {
@@ -906,7 +927,7 @@ func (r *invoiceRepository) GetForPeriod(ctx context.Context, subscriptionID str
 		}).Mark(ierr.ErrDatabase)
 	}
 
-	return domainInvoice.FromEnt(inv), nil
+	return r.materializeReference(ctx, domainInvoice.FromEnt(inv))
 }
 
 func (r *invoiceRepository) getYearMonth(format types.InvoiceNumberFormat, timezone string) string {
@@ -1087,7 +1108,7 @@ func (o InvoiceQueryOptions) GetFieldResolver(field string) (string, error) {
 	return fieldName, nil
 }
 
-func (o InvoiceQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.InvoiceFilter, query InvoiceQuery) (InvoiceQuery, error) {
+func (o InvoiceQueryOptions) applyEntityQueryOptions(ctx context.Context, f *types.InvoiceFilter, query InvoiceQuery) (InvoiceQuery, error) {
 	var err error
 	if f == nil {
 		return query, nil
@@ -1098,6 +1119,7 @@ func (o InvoiceQueryOptions) applyEntityQueryOptions(_ context.Context, f *types
 			invoice.InvoiceNumberContainsFold(search),
 			invoice.IdempotencyKeyContainsFold(search),
 			invoice.IDContainsFold(search),
+			referenceSearchPredicate(ctx, search, false),
 		))
 	}
 
@@ -1176,9 +1198,26 @@ func (o InvoiceQueryOptions) applyEntityQueryOptions(_ context.Context, f *types
 	}
 
 	if f.Filters != nil {
+		filters := make([]*types.FilterCondition, 0, len(f.Filters))
+		for _, condition := range f.Filters {
+			if condition != nil && condition.Field != nil && *condition.Field == "invoice_reference" {
+				if condition.Operator == nil || (*condition.Operator != types.EQUAL && *condition.Operator != types.CONTAINS) || condition.Value == nil || condition.Value.String == nil || len(*condition.Value.String) > 200 {
+					return nil, referenceConflict("invalid invoice reference filter")
+				}
+				value := *condition.Value.String
+				exact := *condition.Operator == types.EQUAL
+				if exact {
+					query = query.Where(invoice.Or(invoice.InvoiceNumberEqualFold(value), invoice.IDEQ(value), invoice.IdempotencyKeyEQ(value), referenceSearchPredicate(ctx, value, true)))
+				} else {
+					query = query.Where(invoice.Or(invoice.InvoiceNumberContainsFold(value), invoice.IDContainsFold(value), invoice.IdempotencyKeyContainsFold(value), referenceSearchPredicate(ctx, value, false)))
+				}
+			} else {
+				filters = append(filters, condition)
+			}
+		}
 		query, err = dsl.ApplyFilters[InvoiceQuery, predicate.Invoice](
 			query,
-			f.Filters,
+			filters,
 			o.GetFieldResolver,
 			func(p dsl.Predicate) predicate.Invoice { return predicate.Invoice(p) },
 		)
@@ -1287,7 +1326,10 @@ func (r *invoiceRepository) GetInvoicesForExport(ctx context.Context, tenantID, 
 
 	result := make([]*domainInvoice.Invoice, len(invoices))
 	for i, inv := range invoices {
-		result[i] = domainInvoice.FromEnt(inv)
+		result[i], err = r.materializeReference(types.SetEnvironmentID(types.SetTenantID(ctx, tenantID), envID), domainInvoice.FromEnt(inv))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return result, nil

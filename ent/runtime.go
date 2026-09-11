@@ -31,6 +31,8 @@ import (
 	"github.com/flexprice/flexprice/ent/incomingwebhookevent"
 	"github.com/flexprice/flexprice/ent/invoice"
 	"github.com/flexprice/flexprice/ent/invoicelineitem"
+	"github.com/flexprice/flexprice/ent/invoicepublicreference"
+	"github.com/flexprice/flexprice/ent/invoicereferencealias"
 	"github.com/flexprice/flexprice/ent/invoicesequence"
 	"github.com/flexprice/flexprice/ent/meter"
 	"github.com/flexprice/flexprice/ent/payment"
@@ -1268,6 +1270,62 @@ func init() {
 	invoicelineitemDescInvoiceLevelDiscount := invoicelineitemFields[24].Descriptor()
 	// invoicelineitem.DefaultInvoiceLevelDiscount holds the default value on creation for the invoice_level_discount field.
 	invoicelineitem.DefaultInvoiceLevelDiscount = invoicelineitemDescInvoiceLevelDiscount.Default.(decimal.Decimal)
+	invoicepublicreferenceFields := schema.InvoicePublicReference{}.Fields()
+	_ = invoicepublicreferenceFields
+	// invoicepublicreferenceDescTenantID is the schema descriptor for tenant_id field.
+	invoicepublicreferenceDescTenantID := invoicepublicreferenceFields[0].Descriptor()
+	// invoicepublicreference.TenantIDValidator is a validator for the "tenant_id" field. It is called by the builders before save.
+	invoicepublicreference.TenantIDValidator = invoicepublicreferenceDescTenantID.Validators[0].(func(string) error)
+	// invoicepublicreferenceDescEnvironmentID is the schema descriptor for environment_id field.
+	invoicepublicreferenceDescEnvironmentID := invoicepublicreferenceFields[1].Descriptor()
+	// invoicepublicreference.EnvironmentIDValidator is a validator for the "environment_id" field. It is called by the builders before save.
+	invoicepublicreference.EnvironmentIDValidator = invoicepublicreferenceDescEnvironmentID.Validators[0].(func(string) error)
+	// invoicepublicreferenceDescPublicReference is the schema descriptor for public_reference field.
+	invoicepublicreferenceDescPublicReference := invoicepublicreferenceFields[2].Descriptor()
+	// invoicepublicreference.PublicReferenceValidator is a validator for the "public_reference" field. It is called by the builders before save.
+	invoicepublicreference.PublicReferenceValidator = invoicepublicreferenceDescPublicReference.Validators[0].(func(string) error)
+	// invoicepublicreferenceDescReservationKey is the schema descriptor for reservation_key field.
+	invoicepublicreferenceDescReservationKey := invoicepublicreferenceFields[3].Descriptor()
+	// invoicepublicreference.ReservationKeyValidator is a validator for the "reservation_key" field. It is called by the builders before save.
+	invoicepublicreference.ReservationKeyValidator = invoicepublicreferenceDescReservationKey.Validators[0].(func(string) error)
+	// invoicepublicreferenceDescCreatedBy is the schema descriptor for created_by field.
+	invoicepublicreferenceDescCreatedBy := invoicepublicreferenceFields[6].Descriptor()
+	// invoicepublicreference.DefaultCreatedBy holds the default value on creation for the created_by field.
+	invoicepublicreference.DefaultCreatedBy = invoicepublicreferenceDescCreatedBy.Default.(string)
+	// invoicepublicreferenceDescCreatedAt is the schema descriptor for created_at field.
+	invoicepublicreferenceDescCreatedAt := invoicepublicreferenceFields[7].Descriptor()
+	// invoicepublicreference.DefaultCreatedAt holds the default value on creation for the created_at field.
+	invoicepublicreference.DefaultCreatedAt = invoicepublicreferenceDescCreatedAt.Default.(func() time.Time)
+	invoicereferencealiasFields := schema.InvoiceReferenceAlias{}.Fields()
+	_ = invoicereferencealiasFields
+	// invoicereferencealiasDescTenantID is the schema descriptor for tenant_id field.
+	invoicereferencealiasDescTenantID := invoicereferencealiasFields[0].Descriptor()
+	// invoicereferencealias.TenantIDValidator is a validator for the "tenant_id" field. It is called by the builders before save.
+	invoicereferencealias.TenantIDValidator = invoicereferencealiasDescTenantID.Validators[0].(func(string) error)
+	// invoicereferencealiasDescEnvironmentID is the schema descriptor for environment_id field.
+	invoicereferencealiasDescEnvironmentID := invoicereferencealiasFields[1].Descriptor()
+	// invoicereferencealias.EnvironmentIDValidator is a validator for the "environment_id" field. It is called by the builders before save.
+	invoicereferencealias.EnvironmentIDValidator = invoicereferencealiasDescEnvironmentID.Validators[0].(func(string) error)
+	// invoicereferencealiasDescPublicReference is the schema descriptor for public_reference field.
+	invoicereferencealiasDescPublicReference := invoicereferencealiasFields[2].Descriptor()
+	// invoicereferencealias.PublicReferenceValidator is a validator for the "public_reference" field. It is called by the builders before save.
+	invoicereferencealias.PublicReferenceValidator = invoicereferencealiasDescPublicReference.Validators[0].(func(string) error)
+	// invoicereferencealiasDescAlias is the schema descriptor for alias field.
+	invoicereferencealiasDescAlias := invoicereferencealiasFields[3].Descriptor()
+	// invoicereferencealias.AliasValidator is a validator for the "alias" field. It is called by the builders before save.
+	invoicereferencealias.AliasValidator = invoicereferencealiasDescAlias.Validators[0].(func(string) error)
+	// invoicereferencealiasDescNormalizedAlias is the schema descriptor for normalized_alias field.
+	invoicereferencealiasDescNormalizedAlias := invoicereferencealiasFields[4].Descriptor()
+	// invoicereferencealias.NormalizedAliasValidator is a validator for the "normalized_alias" field. It is called by the builders before save.
+	invoicereferencealias.NormalizedAliasValidator = invoicereferencealiasDescNormalizedAlias.Validators[0].(func(string) error)
+	// invoicereferencealiasDescCreatedBy is the schema descriptor for created_by field.
+	invoicereferencealiasDescCreatedBy := invoicereferencealiasFields[5].Descriptor()
+	// invoicereferencealias.DefaultCreatedBy holds the default value on creation for the created_by field.
+	invoicereferencealias.DefaultCreatedBy = invoicereferencealiasDescCreatedBy.Default.(string)
+	// invoicereferencealiasDescCreatedAt is the schema descriptor for created_at field.
+	invoicereferencealiasDescCreatedAt := invoicereferencealiasFields[6].Descriptor()
+	// invoicereferencealias.DefaultCreatedAt holds the default value on creation for the created_at field.
+	invoicereferencealias.DefaultCreatedAt = invoicereferencealiasDescCreatedAt.Default.(func() time.Time)
 	invoicesequenceFields := schema.InvoiceSequence{}.Fields()
 	_ = invoicesequenceFields
 	// invoicesequenceDescTenantID is the schema descriptor for tenant_id field.

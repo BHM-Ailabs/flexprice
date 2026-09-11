@@ -193,6 +193,9 @@ func (s *customerPortalService) GetSubscription(ctx context.Context, subscriptio
 
 // GetInvoices returns invoices for the portal customer
 func (s *customerPortalService) GetInvoices(ctx context.Context, req dto.PortalPaginatedRequest) (*dto.ListInvoicesResponse, error) {
+	if len(req.Search) > 200 || req.Limit > 100 || req.Page < 0 {
+		return nil, ierr.NewError("invalid invoice search or pagination").Mark(ierr.ErrValidation)
+	}
 	customerID := types.GetCustomerID(ctx)
 	if customerID == "" {
 		return nil, ierr.NewError("customer not found in context").Mark(ierr.ErrPermissionDenied)
@@ -216,6 +219,7 @@ func (s *customerPortalService) GetInvoices(ctx context.Context, req dto.PortalP
 	}
 
 	filter := &types.InvoiceFilter{
+		Search:      req.Search,
 		CustomerID:  customerID,
 		QueryFilter: queryFilter,
 	}

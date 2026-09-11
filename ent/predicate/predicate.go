@@ -84,6 +84,12 @@ type Invoice func(*sql.Selector)
 // InvoiceLineItem is the predicate function for invoicelineitem builders.
 type InvoiceLineItem func(*sql.Selector)
 
+// InvoicePublicReference is the predicate function for invoicepublicreference builders.
+type InvoicePublicReference func(*sql.Selector)
+
+// InvoiceReferenceAlias is the predicate function for invoicereferencealias builders.
+type InvoiceReferenceAlias func(*sql.Selector)
+
 // InvoiceSequence is the predicate function for invoicesequence builders.
 type InvoiceSequence func(*sql.Selector)
 

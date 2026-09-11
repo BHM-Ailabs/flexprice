@@ -395,6 +395,9 @@ func NewRouter(
 		invoices := v1Private.Group("/invoices")
 		{
 			invoices.POST("/temporal/:invoice_id/finalize", write(types.EntityInvoice, types.ActionWrite), handlers.Invoice.TriggerFinalizeDraftInvoiceWorkflow)
+			invoices.POST("/references/reserve", write(types.EntityInvoice, types.ActionWrite), handlers.Invoice.ReservePublicReference)
+			invoices.POST("/references/backfill", write(types.EntityInvoice, types.ActionWrite), handlers.Invoice.BackfillPublicReferences)
+			invoices.POST("/:id/reference", write(types.EntityInvoice, types.ActionWrite), handlers.Invoice.BindPublicReference)
 			invoices.POST("/search", handlers.Invoice.QueryInvoices)
 			invoices.POST("", write(types.EntityInvoice, types.ActionWrite), handlers.Invoice.CreateOneOffInvoice)
 			invoices.GET("", handlers.Invoice.ListInvoices)

@@ -2,6 +2,15 @@
 
 #let invoice-data = json(sys.inputs.path)
 #let plaqad = invoice-data.at("plaqad_branding", default: false)
+#let biller-data = invoice-data.at("biller", default: (:))
+#let issuer-contact(key, fallback) = {
+  let configured = biller-data.at(key, default: "")
+  if plaqad and (configured == none or configured.trim() == "") { fallback } else { configured }
+}
+#let issuer-website = issuer-contact("website", "https://plaqad.com")
+#let issuer-website-url = if plaqad and not issuer-website.starts-with("https://") and not issuer-website.starts-with("http://") {
+  "https://" + issuer-website
+} else { issuer-website }
 
 // JSON null (e.g. Go nil slice) is Typst none; .at(key, default: ()) does not substitute when the key exists.
 #let json-array(data, key) = {
@@ -40,9 +49,11 @@
   },
   biller: (
     name: invoice-data.at("biller", default: (:)).at("name", default: ""),
-    email: invoice-data.at("biller", default: (:)).at("email", default: ""),
-    help-email: invoice-data.at("biller", default: (:)).at("help_email", default: ""),
-    website: invoice-data.at("biller", default: (:)).at("website", default: ""),
+    plaqad-public-contacts: plaqad,
+    email: issuer-contact("email", "welcome@plaqad.com"),
+    phone: issuer-contact("phone", "+234 (0)1 453 6000"),
+    help-email: issuer-contact("help_email", "welcome@plaqad.com"),
+    website: issuer-website-url,
     address: (
       street: invoice-data.at("biller", default: (:)).at("address", default: (:)).at("street", default: ""),
       city: invoice-data.at("biller", default: (:)).at("address", default: (:)).at("city", default: ""),

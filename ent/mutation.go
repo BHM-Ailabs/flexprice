@@ -37,6 +37,8 @@ import (
 	"github.com/flexprice/flexprice/ent/incomingwebhookevent"
 	"github.com/flexprice/flexprice/ent/invoice"
 	"github.com/flexprice/flexprice/ent/invoicelineitem"
+	"github.com/flexprice/flexprice/ent/invoicepublicreference"
+	"github.com/flexprice/flexprice/ent/invoicereferencealias"
 	"github.com/flexprice/flexprice/ent/invoicesequence"
 	"github.com/flexprice/flexprice/ent/meter"
 	"github.com/flexprice/flexprice/ent/payment"
@@ -106,6 +108,8 @@ const (
 	TypeIncomingWebhookEvent     = "IncomingWebhookEvent"
 	TypeInvoice                  = "Invoice"
 	TypeInvoiceLineItem          = "InvoiceLineItem"
+	TypeInvoicePublicReference   = "InvoicePublicReference"
+	TypeInvoiceReferenceAlias    = "InvoiceReferenceAlias"
 	TypeInvoiceSequence          = "InvoiceSequence"
 	TypeMeter                    = "Meter"
 	TypePayment                  = "Payment"
@@ -38726,6 +38730,1474 @@ func (m *InvoiceLineItemMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown InvoiceLineItem edge %s", name)
+}
+
+// InvoicePublicReferenceMutation represents an operation that mutates the InvoicePublicReference nodes in the graph.
+type InvoicePublicReferenceMutation struct {
+	config
+	op               Op
+	typ              string
+	id               *int
+	tenant_id        *string
+	environment_id   *string
+	public_reference *string
+	reservation_key  *string
+	invoice_id       *string
+	customer_id      *string
+	created_by       *string
+	created_at       *time.Time
+	bound_at         *time.Time
+	clearedFields    map[string]struct{}
+	done             bool
+	oldValue         func(context.Context) (*InvoicePublicReference, error)
+	predicates       []predicate.InvoicePublicReference
+}
+
+var _ ent.Mutation = (*InvoicePublicReferenceMutation)(nil)
+
+// invoicepublicreferenceOption allows management of the mutation configuration using functional options.
+type invoicepublicreferenceOption func(*InvoicePublicReferenceMutation)
+
+// newInvoicePublicReferenceMutation creates new mutation for the InvoicePublicReference entity.
+func newInvoicePublicReferenceMutation(c config, op Op, opts ...invoicepublicreferenceOption) *InvoicePublicReferenceMutation {
+	m := &InvoicePublicReferenceMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeInvoicePublicReference,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withInvoicePublicReferenceID sets the ID field of the mutation.
+func withInvoicePublicReferenceID(id int) invoicepublicreferenceOption {
+	return func(m *InvoicePublicReferenceMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *InvoicePublicReference
+		)
+		m.oldValue = func(ctx context.Context) (*InvoicePublicReference, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().InvoicePublicReference.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withInvoicePublicReference sets the old InvoicePublicReference of the mutation.
+func withInvoicePublicReference(node *InvoicePublicReference) invoicepublicreferenceOption {
+	return func(m *InvoicePublicReferenceMutation) {
+		m.oldValue = func(context.Context) (*InvoicePublicReference, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m InvoicePublicReferenceMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m InvoicePublicReferenceMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *InvoicePublicReferenceMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *InvoicePublicReferenceMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().InvoicePublicReference.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetTenantID sets the "tenant_id" field.
+func (m *InvoicePublicReferenceMutation) SetTenantID(s string) {
+	m.tenant_id = &s
+}
+
+// TenantID returns the value of the "tenant_id" field in the mutation.
+func (m *InvoicePublicReferenceMutation) TenantID() (r string, exists bool) {
+	v := m.tenant_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTenantID returns the old "tenant_id" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldTenantID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTenantID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTenantID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTenantID: %w", err)
+	}
+	return oldValue.TenantID, nil
+}
+
+// ResetTenantID resets all changes to the "tenant_id" field.
+func (m *InvoicePublicReferenceMutation) ResetTenantID() {
+	m.tenant_id = nil
+}
+
+// SetEnvironmentID sets the "environment_id" field.
+func (m *InvoicePublicReferenceMutation) SetEnvironmentID(s string) {
+	m.environment_id = &s
+}
+
+// EnvironmentID returns the value of the "environment_id" field in the mutation.
+func (m *InvoicePublicReferenceMutation) EnvironmentID() (r string, exists bool) {
+	v := m.environment_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnvironmentID returns the old "environment_id" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldEnvironmentID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnvironmentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnvironmentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnvironmentID: %w", err)
+	}
+	return oldValue.EnvironmentID, nil
+}
+
+// ResetEnvironmentID resets all changes to the "environment_id" field.
+func (m *InvoicePublicReferenceMutation) ResetEnvironmentID() {
+	m.environment_id = nil
+}
+
+// SetPublicReference sets the "public_reference" field.
+func (m *InvoicePublicReferenceMutation) SetPublicReference(s string) {
+	m.public_reference = &s
+}
+
+// PublicReference returns the value of the "public_reference" field in the mutation.
+func (m *InvoicePublicReferenceMutation) PublicReference() (r string, exists bool) {
+	v := m.public_reference
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPublicReference returns the old "public_reference" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldPublicReference(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPublicReference is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPublicReference requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPublicReference: %w", err)
+	}
+	return oldValue.PublicReference, nil
+}
+
+// ResetPublicReference resets all changes to the "public_reference" field.
+func (m *InvoicePublicReferenceMutation) ResetPublicReference() {
+	m.public_reference = nil
+}
+
+// SetReservationKey sets the "reservation_key" field.
+func (m *InvoicePublicReferenceMutation) SetReservationKey(s string) {
+	m.reservation_key = &s
+}
+
+// ReservationKey returns the value of the "reservation_key" field in the mutation.
+func (m *InvoicePublicReferenceMutation) ReservationKey() (r string, exists bool) {
+	v := m.reservation_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReservationKey returns the old "reservation_key" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldReservationKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReservationKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReservationKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReservationKey: %w", err)
+	}
+	return oldValue.ReservationKey, nil
+}
+
+// ResetReservationKey resets all changes to the "reservation_key" field.
+func (m *InvoicePublicReferenceMutation) ResetReservationKey() {
+	m.reservation_key = nil
+}
+
+// SetInvoiceID sets the "invoice_id" field.
+func (m *InvoicePublicReferenceMutation) SetInvoiceID(s string) {
+	m.invoice_id = &s
+}
+
+// InvoiceID returns the value of the "invoice_id" field in the mutation.
+func (m *InvoicePublicReferenceMutation) InvoiceID() (r string, exists bool) {
+	v := m.invoice_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldInvoiceID returns the old "invoice_id" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldInvoiceID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldInvoiceID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldInvoiceID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldInvoiceID: %w", err)
+	}
+	return oldValue.InvoiceID, nil
+}
+
+// ClearInvoiceID clears the value of the "invoice_id" field.
+func (m *InvoicePublicReferenceMutation) ClearInvoiceID() {
+	m.invoice_id = nil
+	m.clearedFields[invoicepublicreference.FieldInvoiceID] = struct{}{}
+}
+
+// InvoiceIDCleared returns if the "invoice_id" field was cleared in this mutation.
+func (m *InvoicePublicReferenceMutation) InvoiceIDCleared() bool {
+	_, ok := m.clearedFields[invoicepublicreference.FieldInvoiceID]
+	return ok
+}
+
+// ResetInvoiceID resets all changes to the "invoice_id" field.
+func (m *InvoicePublicReferenceMutation) ResetInvoiceID() {
+	m.invoice_id = nil
+	delete(m.clearedFields, invoicepublicreference.FieldInvoiceID)
+}
+
+// SetCustomerID sets the "customer_id" field.
+func (m *InvoicePublicReferenceMutation) SetCustomerID(s string) {
+	m.customer_id = &s
+}
+
+// CustomerID returns the value of the "customer_id" field in the mutation.
+func (m *InvoicePublicReferenceMutation) CustomerID() (r string, exists bool) {
+	v := m.customer_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCustomerID returns the old "customer_id" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldCustomerID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCustomerID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCustomerID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCustomerID: %w", err)
+	}
+	return oldValue.CustomerID, nil
+}
+
+// ClearCustomerID clears the value of the "customer_id" field.
+func (m *InvoicePublicReferenceMutation) ClearCustomerID() {
+	m.customer_id = nil
+	m.clearedFields[invoicepublicreference.FieldCustomerID] = struct{}{}
+}
+
+// CustomerIDCleared returns if the "customer_id" field was cleared in this mutation.
+func (m *InvoicePublicReferenceMutation) CustomerIDCleared() bool {
+	_, ok := m.clearedFields[invoicepublicreference.FieldCustomerID]
+	return ok
+}
+
+// ResetCustomerID resets all changes to the "customer_id" field.
+func (m *InvoicePublicReferenceMutation) ResetCustomerID() {
+	m.customer_id = nil
+	delete(m.clearedFields, invoicepublicreference.FieldCustomerID)
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *InvoicePublicReferenceMutation) SetCreatedBy(s string) {
+	m.created_by = &s
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *InvoicePublicReferenceMutation) CreatedBy() (r string, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldCreatedBy(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *InvoicePublicReferenceMutation) ResetCreatedBy() {
+	m.created_by = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *InvoicePublicReferenceMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *InvoicePublicReferenceMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *InvoicePublicReferenceMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetBoundAt sets the "bound_at" field.
+func (m *InvoicePublicReferenceMutation) SetBoundAt(t time.Time) {
+	m.bound_at = &t
+}
+
+// BoundAt returns the value of the "bound_at" field in the mutation.
+func (m *InvoicePublicReferenceMutation) BoundAt() (r time.Time, exists bool) {
+	v := m.bound_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBoundAt returns the old "bound_at" field's value of the InvoicePublicReference entity.
+// If the InvoicePublicReference object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoicePublicReferenceMutation) OldBoundAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBoundAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBoundAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBoundAt: %w", err)
+	}
+	return oldValue.BoundAt, nil
+}
+
+// ClearBoundAt clears the value of the "bound_at" field.
+func (m *InvoicePublicReferenceMutation) ClearBoundAt() {
+	m.bound_at = nil
+	m.clearedFields[invoicepublicreference.FieldBoundAt] = struct{}{}
+}
+
+// BoundAtCleared returns if the "bound_at" field was cleared in this mutation.
+func (m *InvoicePublicReferenceMutation) BoundAtCleared() bool {
+	_, ok := m.clearedFields[invoicepublicreference.FieldBoundAt]
+	return ok
+}
+
+// ResetBoundAt resets all changes to the "bound_at" field.
+func (m *InvoicePublicReferenceMutation) ResetBoundAt() {
+	m.bound_at = nil
+	delete(m.clearedFields, invoicepublicreference.FieldBoundAt)
+}
+
+// Where appends a list predicates to the InvoicePublicReferenceMutation builder.
+func (m *InvoicePublicReferenceMutation) Where(ps ...predicate.InvoicePublicReference) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the InvoicePublicReferenceMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *InvoicePublicReferenceMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.InvoicePublicReference, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *InvoicePublicReferenceMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *InvoicePublicReferenceMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (InvoicePublicReference).
+func (m *InvoicePublicReferenceMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *InvoicePublicReferenceMutation) Fields() []string {
+	fields := make([]string, 0, 9)
+	if m.tenant_id != nil {
+		fields = append(fields, invoicepublicreference.FieldTenantID)
+	}
+	if m.environment_id != nil {
+		fields = append(fields, invoicepublicreference.FieldEnvironmentID)
+	}
+	if m.public_reference != nil {
+		fields = append(fields, invoicepublicreference.FieldPublicReference)
+	}
+	if m.reservation_key != nil {
+		fields = append(fields, invoicepublicreference.FieldReservationKey)
+	}
+	if m.invoice_id != nil {
+		fields = append(fields, invoicepublicreference.FieldInvoiceID)
+	}
+	if m.customer_id != nil {
+		fields = append(fields, invoicepublicreference.FieldCustomerID)
+	}
+	if m.created_by != nil {
+		fields = append(fields, invoicepublicreference.FieldCreatedBy)
+	}
+	if m.created_at != nil {
+		fields = append(fields, invoicepublicreference.FieldCreatedAt)
+	}
+	if m.bound_at != nil {
+		fields = append(fields, invoicepublicreference.FieldBoundAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *InvoicePublicReferenceMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case invoicepublicreference.FieldTenantID:
+		return m.TenantID()
+	case invoicepublicreference.FieldEnvironmentID:
+		return m.EnvironmentID()
+	case invoicepublicreference.FieldPublicReference:
+		return m.PublicReference()
+	case invoicepublicreference.FieldReservationKey:
+		return m.ReservationKey()
+	case invoicepublicreference.FieldInvoiceID:
+		return m.InvoiceID()
+	case invoicepublicreference.FieldCustomerID:
+		return m.CustomerID()
+	case invoicepublicreference.FieldCreatedBy:
+		return m.CreatedBy()
+	case invoicepublicreference.FieldCreatedAt:
+		return m.CreatedAt()
+	case invoicepublicreference.FieldBoundAt:
+		return m.BoundAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *InvoicePublicReferenceMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case invoicepublicreference.FieldTenantID:
+		return m.OldTenantID(ctx)
+	case invoicepublicreference.FieldEnvironmentID:
+		return m.OldEnvironmentID(ctx)
+	case invoicepublicreference.FieldPublicReference:
+		return m.OldPublicReference(ctx)
+	case invoicepublicreference.FieldReservationKey:
+		return m.OldReservationKey(ctx)
+	case invoicepublicreference.FieldInvoiceID:
+		return m.OldInvoiceID(ctx)
+	case invoicepublicreference.FieldCustomerID:
+		return m.OldCustomerID(ctx)
+	case invoicepublicreference.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case invoicepublicreference.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case invoicepublicreference.FieldBoundAt:
+		return m.OldBoundAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown InvoicePublicReference field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *InvoicePublicReferenceMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case invoicepublicreference.FieldTenantID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTenantID(v)
+		return nil
+	case invoicepublicreference.FieldEnvironmentID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnvironmentID(v)
+		return nil
+	case invoicepublicreference.FieldPublicReference:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPublicReference(v)
+		return nil
+	case invoicepublicreference.FieldReservationKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReservationKey(v)
+		return nil
+	case invoicepublicreference.FieldInvoiceID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetInvoiceID(v)
+		return nil
+	case invoicepublicreference.FieldCustomerID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCustomerID(v)
+		return nil
+	case invoicepublicreference.FieldCreatedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case invoicepublicreference.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case invoicepublicreference.FieldBoundAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBoundAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown InvoicePublicReference field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *InvoicePublicReferenceMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *InvoicePublicReferenceMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *InvoicePublicReferenceMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown InvoicePublicReference numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *InvoicePublicReferenceMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(invoicepublicreference.FieldInvoiceID) {
+		fields = append(fields, invoicepublicreference.FieldInvoiceID)
+	}
+	if m.FieldCleared(invoicepublicreference.FieldCustomerID) {
+		fields = append(fields, invoicepublicreference.FieldCustomerID)
+	}
+	if m.FieldCleared(invoicepublicreference.FieldBoundAt) {
+		fields = append(fields, invoicepublicreference.FieldBoundAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *InvoicePublicReferenceMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *InvoicePublicReferenceMutation) ClearField(name string) error {
+	switch name {
+	case invoicepublicreference.FieldInvoiceID:
+		m.ClearInvoiceID()
+		return nil
+	case invoicepublicreference.FieldCustomerID:
+		m.ClearCustomerID()
+		return nil
+	case invoicepublicreference.FieldBoundAt:
+		m.ClearBoundAt()
+		return nil
+	}
+	return fmt.Errorf("unknown InvoicePublicReference nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *InvoicePublicReferenceMutation) ResetField(name string) error {
+	switch name {
+	case invoicepublicreference.FieldTenantID:
+		m.ResetTenantID()
+		return nil
+	case invoicepublicreference.FieldEnvironmentID:
+		m.ResetEnvironmentID()
+		return nil
+	case invoicepublicreference.FieldPublicReference:
+		m.ResetPublicReference()
+		return nil
+	case invoicepublicreference.FieldReservationKey:
+		m.ResetReservationKey()
+		return nil
+	case invoicepublicreference.FieldInvoiceID:
+		m.ResetInvoiceID()
+		return nil
+	case invoicepublicreference.FieldCustomerID:
+		m.ResetCustomerID()
+		return nil
+	case invoicepublicreference.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case invoicepublicreference.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case invoicepublicreference.FieldBoundAt:
+		m.ResetBoundAt()
+		return nil
+	}
+	return fmt.Errorf("unknown InvoicePublicReference field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *InvoicePublicReferenceMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *InvoicePublicReferenceMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *InvoicePublicReferenceMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *InvoicePublicReferenceMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *InvoicePublicReferenceMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *InvoicePublicReferenceMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *InvoicePublicReferenceMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown InvoicePublicReference unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *InvoicePublicReferenceMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown InvoicePublicReference edge %s", name)
+}
+
+// InvoiceReferenceAliasMutation represents an operation that mutates the InvoiceReferenceAlias nodes in the graph.
+type InvoiceReferenceAliasMutation struct {
+	config
+	op               Op
+	typ              string
+	id               *int
+	tenant_id        *string
+	environment_id   *string
+	public_reference *string
+	alias            *string
+	normalized_alias *string
+	created_by       *string
+	created_at       *time.Time
+	clearedFields    map[string]struct{}
+	done             bool
+	oldValue         func(context.Context) (*InvoiceReferenceAlias, error)
+	predicates       []predicate.InvoiceReferenceAlias
+}
+
+var _ ent.Mutation = (*InvoiceReferenceAliasMutation)(nil)
+
+// invoicereferencealiasOption allows management of the mutation configuration using functional options.
+type invoicereferencealiasOption func(*InvoiceReferenceAliasMutation)
+
+// newInvoiceReferenceAliasMutation creates new mutation for the InvoiceReferenceAlias entity.
+func newInvoiceReferenceAliasMutation(c config, op Op, opts ...invoicereferencealiasOption) *InvoiceReferenceAliasMutation {
+	m := &InvoiceReferenceAliasMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeInvoiceReferenceAlias,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withInvoiceReferenceAliasID sets the ID field of the mutation.
+func withInvoiceReferenceAliasID(id int) invoicereferencealiasOption {
+	return func(m *InvoiceReferenceAliasMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *InvoiceReferenceAlias
+		)
+		m.oldValue = func(ctx context.Context) (*InvoiceReferenceAlias, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().InvoiceReferenceAlias.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withInvoiceReferenceAlias sets the old InvoiceReferenceAlias of the mutation.
+func withInvoiceReferenceAlias(node *InvoiceReferenceAlias) invoicereferencealiasOption {
+	return func(m *InvoiceReferenceAliasMutation) {
+		m.oldValue = func(context.Context) (*InvoiceReferenceAlias, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m InvoiceReferenceAliasMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m InvoiceReferenceAliasMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *InvoiceReferenceAliasMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *InvoiceReferenceAliasMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().InvoiceReferenceAlias.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetTenantID sets the "tenant_id" field.
+func (m *InvoiceReferenceAliasMutation) SetTenantID(s string) {
+	m.tenant_id = &s
+}
+
+// TenantID returns the value of the "tenant_id" field in the mutation.
+func (m *InvoiceReferenceAliasMutation) TenantID() (r string, exists bool) {
+	v := m.tenant_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTenantID returns the old "tenant_id" field's value of the InvoiceReferenceAlias entity.
+// If the InvoiceReferenceAlias object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoiceReferenceAliasMutation) OldTenantID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTenantID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTenantID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTenantID: %w", err)
+	}
+	return oldValue.TenantID, nil
+}
+
+// ResetTenantID resets all changes to the "tenant_id" field.
+func (m *InvoiceReferenceAliasMutation) ResetTenantID() {
+	m.tenant_id = nil
+}
+
+// SetEnvironmentID sets the "environment_id" field.
+func (m *InvoiceReferenceAliasMutation) SetEnvironmentID(s string) {
+	m.environment_id = &s
+}
+
+// EnvironmentID returns the value of the "environment_id" field in the mutation.
+func (m *InvoiceReferenceAliasMutation) EnvironmentID() (r string, exists bool) {
+	v := m.environment_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnvironmentID returns the old "environment_id" field's value of the InvoiceReferenceAlias entity.
+// If the InvoiceReferenceAlias object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoiceReferenceAliasMutation) OldEnvironmentID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnvironmentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnvironmentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnvironmentID: %w", err)
+	}
+	return oldValue.EnvironmentID, nil
+}
+
+// ResetEnvironmentID resets all changes to the "environment_id" field.
+func (m *InvoiceReferenceAliasMutation) ResetEnvironmentID() {
+	m.environment_id = nil
+}
+
+// SetPublicReference sets the "public_reference" field.
+func (m *InvoiceReferenceAliasMutation) SetPublicReference(s string) {
+	m.public_reference = &s
+}
+
+// PublicReference returns the value of the "public_reference" field in the mutation.
+func (m *InvoiceReferenceAliasMutation) PublicReference() (r string, exists bool) {
+	v := m.public_reference
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPublicReference returns the old "public_reference" field's value of the InvoiceReferenceAlias entity.
+// If the InvoiceReferenceAlias object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoiceReferenceAliasMutation) OldPublicReference(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPublicReference is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPublicReference requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPublicReference: %w", err)
+	}
+	return oldValue.PublicReference, nil
+}
+
+// ResetPublicReference resets all changes to the "public_reference" field.
+func (m *InvoiceReferenceAliasMutation) ResetPublicReference() {
+	m.public_reference = nil
+}
+
+// SetAlias sets the "alias" field.
+func (m *InvoiceReferenceAliasMutation) SetAlias(s string) {
+	m.alias = &s
+}
+
+// Alias returns the value of the "alias" field in the mutation.
+func (m *InvoiceReferenceAliasMutation) Alias() (r string, exists bool) {
+	v := m.alias
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAlias returns the old "alias" field's value of the InvoiceReferenceAlias entity.
+// If the InvoiceReferenceAlias object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoiceReferenceAliasMutation) OldAlias(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAlias is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAlias requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAlias: %w", err)
+	}
+	return oldValue.Alias, nil
+}
+
+// ResetAlias resets all changes to the "alias" field.
+func (m *InvoiceReferenceAliasMutation) ResetAlias() {
+	m.alias = nil
+}
+
+// SetNormalizedAlias sets the "normalized_alias" field.
+func (m *InvoiceReferenceAliasMutation) SetNormalizedAlias(s string) {
+	m.normalized_alias = &s
+}
+
+// NormalizedAlias returns the value of the "normalized_alias" field in the mutation.
+func (m *InvoiceReferenceAliasMutation) NormalizedAlias() (r string, exists bool) {
+	v := m.normalized_alias
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNormalizedAlias returns the old "normalized_alias" field's value of the InvoiceReferenceAlias entity.
+// If the InvoiceReferenceAlias object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoiceReferenceAliasMutation) OldNormalizedAlias(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNormalizedAlias is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNormalizedAlias requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNormalizedAlias: %w", err)
+	}
+	return oldValue.NormalizedAlias, nil
+}
+
+// ResetNormalizedAlias resets all changes to the "normalized_alias" field.
+func (m *InvoiceReferenceAliasMutation) ResetNormalizedAlias() {
+	m.normalized_alias = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *InvoiceReferenceAliasMutation) SetCreatedBy(s string) {
+	m.created_by = &s
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *InvoiceReferenceAliasMutation) CreatedBy() (r string, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the InvoiceReferenceAlias entity.
+// If the InvoiceReferenceAlias object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoiceReferenceAliasMutation) OldCreatedBy(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *InvoiceReferenceAliasMutation) ResetCreatedBy() {
+	m.created_by = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *InvoiceReferenceAliasMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *InvoiceReferenceAliasMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the InvoiceReferenceAlias entity.
+// If the InvoiceReferenceAlias object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *InvoiceReferenceAliasMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *InvoiceReferenceAliasMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// Where appends a list predicates to the InvoiceReferenceAliasMutation builder.
+func (m *InvoiceReferenceAliasMutation) Where(ps ...predicate.InvoiceReferenceAlias) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the InvoiceReferenceAliasMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *InvoiceReferenceAliasMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.InvoiceReferenceAlias, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *InvoiceReferenceAliasMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *InvoiceReferenceAliasMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (InvoiceReferenceAlias).
+func (m *InvoiceReferenceAliasMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *InvoiceReferenceAliasMutation) Fields() []string {
+	fields := make([]string, 0, 7)
+	if m.tenant_id != nil {
+		fields = append(fields, invoicereferencealias.FieldTenantID)
+	}
+	if m.environment_id != nil {
+		fields = append(fields, invoicereferencealias.FieldEnvironmentID)
+	}
+	if m.public_reference != nil {
+		fields = append(fields, invoicereferencealias.FieldPublicReference)
+	}
+	if m.alias != nil {
+		fields = append(fields, invoicereferencealias.FieldAlias)
+	}
+	if m.normalized_alias != nil {
+		fields = append(fields, invoicereferencealias.FieldNormalizedAlias)
+	}
+	if m.created_by != nil {
+		fields = append(fields, invoicereferencealias.FieldCreatedBy)
+	}
+	if m.created_at != nil {
+		fields = append(fields, invoicereferencealias.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *InvoiceReferenceAliasMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case invoicereferencealias.FieldTenantID:
+		return m.TenantID()
+	case invoicereferencealias.FieldEnvironmentID:
+		return m.EnvironmentID()
+	case invoicereferencealias.FieldPublicReference:
+		return m.PublicReference()
+	case invoicereferencealias.FieldAlias:
+		return m.Alias()
+	case invoicereferencealias.FieldNormalizedAlias:
+		return m.NormalizedAlias()
+	case invoicereferencealias.FieldCreatedBy:
+		return m.CreatedBy()
+	case invoicereferencealias.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *InvoiceReferenceAliasMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case invoicereferencealias.FieldTenantID:
+		return m.OldTenantID(ctx)
+	case invoicereferencealias.FieldEnvironmentID:
+		return m.OldEnvironmentID(ctx)
+	case invoicereferencealias.FieldPublicReference:
+		return m.OldPublicReference(ctx)
+	case invoicereferencealias.FieldAlias:
+		return m.OldAlias(ctx)
+	case invoicereferencealias.FieldNormalizedAlias:
+		return m.OldNormalizedAlias(ctx)
+	case invoicereferencealias.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case invoicereferencealias.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown InvoiceReferenceAlias field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *InvoiceReferenceAliasMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case invoicereferencealias.FieldTenantID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTenantID(v)
+		return nil
+	case invoicereferencealias.FieldEnvironmentID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnvironmentID(v)
+		return nil
+	case invoicereferencealias.FieldPublicReference:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPublicReference(v)
+		return nil
+	case invoicereferencealias.FieldAlias:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAlias(v)
+		return nil
+	case invoicereferencealias.FieldNormalizedAlias:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNormalizedAlias(v)
+		return nil
+	case invoicereferencealias.FieldCreatedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case invoicereferencealias.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown InvoiceReferenceAlias field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *InvoiceReferenceAliasMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *InvoiceReferenceAliasMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *InvoiceReferenceAliasMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown InvoiceReferenceAlias numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *InvoiceReferenceAliasMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *InvoiceReferenceAliasMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *InvoiceReferenceAliasMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown InvoiceReferenceAlias nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *InvoiceReferenceAliasMutation) ResetField(name string) error {
+	switch name {
+	case invoicereferencealias.FieldTenantID:
+		m.ResetTenantID()
+		return nil
+	case invoicereferencealias.FieldEnvironmentID:
+		m.ResetEnvironmentID()
+		return nil
+	case invoicereferencealias.FieldPublicReference:
+		m.ResetPublicReference()
+		return nil
+	case invoicereferencealias.FieldAlias:
+		m.ResetAlias()
+		return nil
+	case invoicereferencealias.FieldNormalizedAlias:
+		m.ResetNormalizedAlias()
+		return nil
+	case invoicereferencealias.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case invoicereferencealias.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown InvoiceReferenceAlias field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *InvoiceReferenceAliasMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *InvoiceReferenceAliasMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *InvoiceReferenceAliasMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *InvoiceReferenceAliasMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *InvoiceReferenceAliasMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *InvoiceReferenceAliasMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *InvoiceReferenceAliasMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown InvoiceReferenceAlias unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *InvoiceReferenceAliasMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown InvoiceReferenceAlias edge %s", name)
 }
 
 // InvoiceSequenceMutation represents an operation that mutates the InvoiceSequence nodes in the graph.

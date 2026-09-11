@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -684,4 +685,34 @@ func (s *PaymentServiceSuite) TestDeletePaymentRejectsConcurrentStatusChange() {
 	err = repo.DeleteWithExpectedStatus(ctx, p.ID, types.PaymentStatusInitiated)
 	s.Error(err, "a settled payment must not be deleted on a stale deletability check")
 	s.True(ierr.IsVersionConflict(err), "expected a version conflict, got: %v", err)
+}
+
+func (s *PaymentServiceSuite) TestGetPaymentKeepsPublicReferenceBeforeLegacyNumber() {
+	ctx := s.GetContext()
+	s.testData.invoice.InvoiceNumber = nil
+	s.testData.invoice.InvoiceStatus = types.InvoiceStatusDraft
+	s.testData.invoice.PublicReference = lo.ToPtr("100001")
+	s.testData.invoice.ReferenceAliases = []string{"OLD-DRAFT-REFERENCE"}
+	s.service.(*paymentService).InvoiceRepo = paymentReferenceInvoiceRepo{Repository: s.GetStores().InvoiceRepo, value: s.testData.invoice}
+	p := &payment.Payment{
+		ID: "pay_reference_projection", DestinationType: types.PaymentDestinationTypeInvoice,
+		DestinationID: s.testData.invoice.ID, PaymentStatus: types.PaymentStatusSucceeded,
+		Amount: decimal.NewFromInt(100), Currency: "usd", BaseModel: types.GetDefaultBaseModel(ctx),
+	}
+	s.Require().NoError(s.GetStores().PaymentRepo.Create(ctx, p))
+	got, err := s.service.GetPayment(ctx, p.ID)
+	s.Require().NoError(err)
+	s.Nil(got.InvoiceNumber)
+	s.Require().NotNil(got.PublicReference)
+	s.Equal("100001", *got.PublicReference)
+	s.Equal([]string{"OLD-DRAFT-REFERENCE"}, got.ReferenceAliases)
+}
+
+type paymentReferenceInvoiceRepo struct {
+	invoice.Repository
+	value *invoice.Invoice
+}
+
+func (r paymentReferenceInvoiceRepo) Get(context.Context, string) (*invoice.Invoice, error) {
+	return r.value, nil
 }

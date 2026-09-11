@@ -59,6 +59,10 @@ type Invoice struct {
 	// invoice_number is the human-readable invoice number displayed to customers (e.g., INV-2024-001)
 	InvoiceNumber *string `json:"invoice_number"`
 
+	// Registry-owned presentation fields; stored in InvoicePublicReference/InvoiceReferenceAlias, never invoice financial rows.
+	PublicReference  *string  `json:"public_reference,omitempty"`
+	ReferenceAliases []string `json:"reference_aliases,omitempty"`
+
 	// idempotency_key is a unique key used to prevent duplicate invoice creation when retrying API calls
 	IdempotencyKey *string `json:"idempotency_key"`
 

@@ -41,6 +41,8 @@ import (
 	"github.com/flexprice/flexprice/ent/incomingwebhookevent"
 	"github.com/flexprice/flexprice/ent/invoice"
 	"github.com/flexprice/flexprice/ent/invoicelineitem"
+	"github.com/flexprice/flexprice/ent/invoicepublicreference"
+	"github.com/flexprice/flexprice/ent/invoicereferencealias"
 	"github.com/flexprice/flexprice/ent/invoicesequence"
 	"github.com/flexprice/flexprice/ent/meter"
 	"github.com/flexprice/flexprice/ent/payment"
@@ -130,6 +132,10 @@ type Client struct {
 	Invoice *InvoiceClient
 	// InvoiceLineItem is the client for interacting with the InvoiceLineItem builders.
 	InvoiceLineItem *InvoiceLineItemClient
+	// InvoicePublicReference is the client for interacting with the InvoicePublicReference builders.
+	InvoicePublicReference *InvoicePublicReferenceClient
+	// InvoiceReferenceAlias is the client for interacting with the InvoiceReferenceAlias builders.
+	InvoiceReferenceAlias *InvoiceReferenceAliasClient
 	// InvoiceSequence is the client for interacting with the InvoiceSequence builders.
 	InvoiceSequence *InvoiceSequenceClient
 	// Meter is the client for interacting with the Meter builders.
@@ -223,6 +229,8 @@ func (c *Client) init() {
 	c.IncomingWebhookEvent = NewIncomingWebhookEventClient(c.config)
 	c.Invoice = NewInvoiceClient(c.config)
 	c.InvoiceLineItem = NewInvoiceLineItemClient(c.config)
+	c.InvoicePublicReference = NewInvoicePublicReferenceClient(c.config)
+	c.InvoiceReferenceAlias = NewInvoiceReferenceAliasClient(c.config)
 	c.InvoiceSequence = NewInvoiceSequenceClient(c.config)
 	c.Meter = NewMeterClient(c.config)
 	c.Payment = NewPaymentClient(c.config)
@@ -369,6 +377,8 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		IncomingWebhookEvent:     NewIncomingWebhookEventClient(cfg),
 		Invoice:                  NewInvoiceClient(cfg),
 		InvoiceLineItem:          NewInvoiceLineItemClient(cfg),
+		InvoicePublicReference:   NewInvoicePublicReferenceClient(cfg),
+		InvoiceReferenceAlias:    NewInvoiceReferenceAliasClient(cfg),
 		InvoiceSequence:          NewInvoiceSequenceClient(cfg),
 		Meter:                    NewMeterClient(cfg),
 		Payment:                  NewPaymentClient(cfg),
@@ -442,6 +452,8 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		IncomingWebhookEvent:     NewIncomingWebhookEventClient(cfg),
 		Invoice:                  NewInvoiceClient(cfg),
 		InvoiceLineItem:          NewInvoiceLineItemClient(cfg),
+		InvoicePublicReference:   NewInvoicePublicReferenceClient(cfg),
+		InvoiceReferenceAlias:    NewInvoiceReferenceAliasClient(cfg),
 		InvoiceSequence:          NewInvoiceSequenceClient(cfg),
 		Meter:                    NewMeterClient(cfg),
 		Payment:                  NewPaymentClient(cfg),
@@ -505,12 +517,13 @@ func (c *Client) Use(hooks ...Hook) {
 		c.CreditGrantApplication, c.CreditNote, c.CreditNoteLineItem, c.Customer,
 		c.Entitlement, c.EntitlementGrant, c.EntityIntegrationMapping, c.Environment,
 		c.Feature, c.Group, c.IncomingWebhookEvent, c.Invoice, c.InvoiceLineItem,
-		c.InvoiceSequence, c.Meter, c.Payment, c.PaymentAttempt, c.PaymentMethod,
-		c.Plan, c.Price, c.PriceUnit, c.Refund, c.ScheduledTask, c.Secret, c.Settings,
-		c.Subscription, c.SubscriptionLineItem, c.SubscriptionPause,
-		c.SubscriptionPhase, c.SubscriptionSchedule, c.SystemEvent, c.Task,
-		c.TaxApplied, c.TaxAssociation, c.TaxRate, c.Tenant, c.UsageRecord, c.User,
-		c.Wallet, c.WalletTransaction, c.WorkflowExecution,
+		c.InvoicePublicReference, c.InvoiceReferenceAlias, c.InvoiceSequence, c.Meter,
+		c.Payment, c.PaymentAttempt, c.PaymentMethod, c.Plan, c.Price, c.PriceUnit,
+		c.Refund, c.ScheduledTask, c.Secret, c.Settings, c.Subscription,
+		c.SubscriptionLineItem, c.SubscriptionPause, c.SubscriptionPhase,
+		c.SubscriptionSchedule, c.SystemEvent, c.Task, c.TaxApplied, c.TaxAssociation,
+		c.TaxRate, c.Tenant, c.UsageRecord, c.User, c.Wallet, c.WalletTransaction,
+		c.WorkflowExecution,
 	} {
 		n.Use(hooks...)
 	}
@@ -526,12 +539,13 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.CreditGrantApplication, c.CreditNote, c.CreditNoteLineItem, c.Customer,
 		c.Entitlement, c.EntitlementGrant, c.EntityIntegrationMapping, c.Environment,
 		c.Feature, c.Group, c.IncomingWebhookEvent, c.Invoice, c.InvoiceLineItem,
-		c.InvoiceSequence, c.Meter, c.Payment, c.PaymentAttempt, c.PaymentMethod,
-		c.Plan, c.Price, c.PriceUnit, c.Refund, c.ScheduledTask, c.Secret, c.Settings,
-		c.Subscription, c.SubscriptionLineItem, c.SubscriptionPause,
-		c.SubscriptionPhase, c.SubscriptionSchedule, c.SystemEvent, c.Task,
-		c.TaxApplied, c.TaxAssociation, c.TaxRate, c.Tenant, c.UsageRecord, c.User,
-		c.Wallet, c.WalletTransaction, c.WorkflowExecution,
+		c.InvoicePublicReference, c.InvoiceReferenceAlias, c.InvoiceSequence, c.Meter,
+		c.Payment, c.PaymentAttempt, c.PaymentMethod, c.Plan, c.Price, c.PriceUnit,
+		c.Refund, c.ScheduledTask, c.Secret, c.Settings, c.Subscription,
+		c.SubscriptionLineItem, c.SubscriptionPause, c.SubscriptionPhase,
+		c.SubscriptionSchedule, c.SystemEvent, c.Task, c.TaxApplied, c.TaxAssociation,
+		c.TaxRate, c.Tenant, c.UsageRecord, c.User, c.Wallet, c.WalletTransaction,
+		c.WorkflowExecution,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -592,6 +606,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Invoice.mutate(ctx, m)
 	case *InvoiceLineItemMutation:
 		return c.InvoiceLineItem.mutate(ctx, m)
+	case *InvoicePublicReferenceMutation:
+		return c.InvoicePublicReference.mutate(ctx, m)
+	case *InvoiceReferenceAliasMutation:
+		return c.InvoiceReferenceAlias.mutate(ctx, m)
 	case *InvoiceSequenceMutation:
 		return c.InvoiceSequence.mutate(ctx, m)
 	case *MeterMutation:
@@ -4460,6 +4478,272 @@ func (c *InvoiceLineItemClient) mutate(ctx context.Context, m *InvoiceLineItemMu
 		return (&InvoiceLineItemDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown InvoiceLineItem mutation op: %q", m.Op())
+	}
+}
+
+// InvoicePublicReferenceClient is a client for the InvoicePublicReference schema.
+type InvoicePublicReferenceClient struct {
+	config
+}
+
+// NewInvoicePublicReferenceClient returns a client for the InvoicePublicReference from the given config.
+func NewInvoicePublicReferenceClient(c config) *InvoicePublicReferenceClient {
+	return &InvoicePublicReferenceClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `invoicepublicreference.Hooks(f(g(h())))`.
+func (c *InvoicePublicReferenceClient) Use(hooks ...Hook) {
+	c.hooks.InvoicePublicReference = append(c.hooks.InvoicePublicReference, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `invoicepublicreference.Intercept(f(g(h())))`.
+func (c *InvoicePublicReferenceClient) Intercept(interceptors ...Interceptor) {
+	c.inters.InvoicePublicReference = append(c.inters.InvoicePublicReference, interceptors...)
+}
+
+// Create returns a builder for creating a InvoicePublicReference entity.
+func (c *InvoicePublicReferenceClient) Create() *InvoicePublicReferenceCreate {
+	mutation := newInvoicePublicReferenceMutation(c.config, OpCreate)
+	return &InvoicePublicReferenceCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of InvoicePublicReference entities.
+func (c *InvoicePublicReferenceClient) CreateBulk(builders ...*InvoicePublicReferenceCreate) *InvoicePublicReferenceCreateBulk {
+	return &InvoicePublicReferenceCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *InvoicePublicReferenceClient) MapCreateBulk(slice any, setFunc func(*InvoicePublicReferenceCreate, int)) *InvoicePublicReferenceCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &InvoicePublicReferenceCreateBulk{err: fmt.Errorf("calling to InvoicePublicReferenceClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*InvoicePublicReferenceCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &InvoicePublicReferenceCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for InvoicePublicReference.
+func (c *InvoicePublicReferenceClient) Update() *InvoicePublicReferenceUpdate {
+	mutation := newInvoicePublicReferenceMutation(c.config, OpUpdate)
+	return &InvoicePublicReferenceUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *InvoicePublicReferenceClient) UpdateOne(ipr *InvoicePublicReference) *InvoicePublicReferenceUpdateOne {
+	mutation := newInvoicePublicReferenceMutation(c.config, OpUpdateOne, withInvoicePublicReference(ipr))
+	return &InvoicePublicReferenceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *InvoicePublicReferenceClient) UpdateOneID(id int) *InvoicePublicReferenceUpdateOne {
+	mutation := newInvoicePublicReferenceMutation(c.config, OpUpdateOne, withInvoicePublicReferenceID(id))
+	return &InvoicePublicReferenceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for InvoicePublicReference.
+func (c *InvoicePublicReferenceClient) Delete() *InvoicePublicReferenceDelete {
+	mutation := newInvoicePublicReferenceMutation(c.config, OpDelete)
+	return &InvoicePublicReferenceDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *InvoicePublicReferenceClient) DeleteOne(ipr *InvoicePublicReference) *InvoicePublicReferenceDeleteOne {
+	return c.DeleteOneID(ipr.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *InvoicePublicReferenceClient) DeleteOneID(id int) *InvoicePublicReferenceDeleteOne {
+	builder := c.Delete().Where(invoicepublicreference.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &InvoicePublicReferenceDeleteOne{builder}
+}
+
+// Query returns a query builder for InvoicePublicReference.
+func (c *InvoicePublicReferenceClient) Query() *InvoicePublicReferenceQuery {
+	return &InvoicePublicReferenceQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeInvoicePublicReference},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a InvoicePublicReference entity by its id.
+func (c *InvoicePublicReferenceClient) Get(ctx context.Context, id int) (*InvoicePublicReference, error) {
+	return c.Query().Where(invoicepublicreference.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *InvoicePublicReferenceClient) GetX(ctx context.Context, id int) *InvoicePublicReference {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *InvoicePublicReferenceClient) Hooks() []Hook {
+	return c.hooks.InvoicePublicReference
+}
+
+// Interceptors returns the client interceptors.
+func (c *InvoicePublicReferenceClient) Interceptors() []Interceptor {
+	return c.inters.InvoicePublicReference
+}
+
+func (c *InvoicePublicReferenceClient) mutate(ctx context.Context, m *InvoicePublicReferenceMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&InvoicePublicReferenceCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&InvoicePublicReferenceUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&InvoicePublicReferenceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&InvoicePublicReferenceDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown InvoicePublicReference mutation op: %q", m.Op())
+	}
+}
+
+// InvoiceReferenceAliasClient is a client for the InvoiceReferenceAlias schema.
+type InvoiceReferenceAliasClient struct {
+	config
+}
+
+// NewInvoiceReferenceAliasClient returns a client for the InvoiceReferenceAlias from the given config.
+func NewInvoiceReferenceAliasClient(c config) *InvoiceReferenceAliasClient {
+	return &InvoiceReferenceAliasClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `invoicereferencealias.Hooks(f(g(h())))`.
+func (c *InvoiceReferenceAliasClient) Use(hooks ...Hook) {
+	c.hooks.InvoiceReferenceAlias = append(c.hooks.InvoiceReferenceAlias, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `invoicereferencealias.Intercept(f(g(h())))`.
+func (c *InvoiceReferenceAliasClient) Intercept(interceptors ...Interceptor) {
+	c.inters.InvoiceReferenceAlias = append(c.inters.InvoiceReferenceAlias, interceptors...)
+}
+
+// Create returns a builder for creating a InvoiceReferenceAlias entity.
+func (c *InvoiceReferenceAliasClient) Create() *InvoiceReferenceAliasCreate {
+	mutation := newInvoiceReferenceAliasMutation(c.config, OpCreate)
+	return &InvoiceReferenceAliasCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of InvoiceReferenceAlias entities.
+func (c *InvoiceReferenceAliasClient) CreateBulk(builders ...*InvoiceReferenceAliasCreate) *InvoiceReferenceAliasCreateBulk {
+	return &InvoiceReferenceAliasCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *InvoiceReferenceAliasClient) MapCreateBulk(slice any, setFunc func(*InvoiceReferenceAliasCreate, int)) *InvoiceReferenceAliasCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &InvoiceReferenceAliasCreateBulk{err: fmt.Errorf("calling to InvoiceReferenceAliasClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*InvoiceReferenceAliasCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &InvoiceReferenceAliasCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for InvoiceReferenceAlias.
+func (c *InvoiceReferenceAliasClient) Update() *InvoiceReferenceAliasUpdate {
+	mutation := newInvoiceReferenceAliasMutation(c.config, OpUpdate)
+	return &InvoiceReferenceAliasUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *InvoiceReferenceAliasClient) UpdateOne(ira *InvoiceReferenceAlias) *InvoiceReferenceAliasUpdateOne {
+	mutation := newInvoiceReferenceAliasMutation(c.config, OpUpdateOne, withInvoiceReferenceAlias(ira))
+	return &InvoiceReferenceAliasUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *InvoiceReferenceAliasClient) UpdateOneID(id int) *InvoiceReferenceAliasUpdateOne {
+	mutation := newInvoiceReferenceAliasMutation(c.config, OpUpdateOne, withInvoiceReferenceAliasID(id))
+	return &InvoiceReferenceAliasUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for InvoiceReferenceAlias.
+func (c *InvoiceReferenceAliasClient) Delete() *InvoiceReferenceAliasDelete {
+	mutation := newInvoiceReferenceAliasMutation(c.config, OpDelete)
+	return &InvoiceReferenceAliasDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *InvoiceReferenceAliasClient) DeleteOne(ira *InvoiceReferenceAlias) *InvoiceReferenceAliasDeleteOne {
+	return c.DeleteOneID(ira.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *InvoiceReferenceAliasClient) DeleteOneID(id int) *InvoiceReferenceAliasDeleteOne {
+	builder := c.Delete().Where(invoicereferencealias.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &InvoiceReferenceAliasDeleteOne{builder}
+}
+
+// Query returns a query builder for InvoiceReferenceAlias.
+func (c *InvoiceReferenceAliasClient) Query() *InvoiceReferenceAliasQuery {
+	return &InvoiceReferenceAliasQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeInvoiceReferenceAlias},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a InvoiceReferenceAlias entity by its id.
+func (c *InvoiceReferenceAliasClient) Get(ctx context.Context, id int) (*InvoiceReferenceAlias, error) {
+	return c.Query().Where(invoicereferencealias.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *InvoiceReferenceAliasClient) GetX(ctx context.Context, id int) *InvoiceReferenceAlias {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *InvoiceReferenceAliasClient) Hooks() []Hook {
+	return c.hooks.InvoiceReferenceAlias
+}
+
+// Interceptors returns the client interceptors.
+func (c *InvoiceReferenceAliasClient) Interceptors() []Interceptor {
+	return c.inters.InvoiceReferenceAlias
+}
+
+func (c *InvoiceReferenceAliasClient) mutate(ctx context.Context, m *InvoiceReferenceAliasMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&InvoiceReferenceAliasCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&InvoiceReferenceAliasUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&InvoiceReferenceAliasUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&InvoiceReferenceAliasDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown InvoiceReferenceAlias mutation op: %q", m.Op())
 	}
 }
 
@@ -8499,9 +8783,10 @@ type (
 		CouponAssociation, CreditGrant, CreditGrantApplication, CreditNote,
 		CreditNoteLineItem, Customer, Entitlement, EntitlementGrant,
 		EntityIntegrationMapping, Environment, Feature, Group, IncomingWebhookEvent,
-		Invoice, InvoiceLineItem, InvoiceSequence, Meter, Payment, PaymentAttempt,
-		PaymentMethod, Plan, Price, PriceUnit, Refund, ScheduledTask, Secret, Settings,
-		Subscription, SubscriptionLineItem, SubscriptionPause, SubscriptionPhase,
+		Invoice, InvoiceLineItem, InvoicePublicReference, InvoiceReferenceAlias,
+		InvoiceSequence, Meter, Payment, PaymentAttempt, PaymentMethod, Plan, Price,
+		PriceUnit, Refund, ScheduledTask, Secret, Settings, Subscription,
+		SubscriptionLineItem, SubscriptionPause, SubscriptionPhase,
 		SubscriptionSchedule, SystemEvent, Task, TaxApplied, TaxAssociation, TaxRate,
 		Tenant, UsageRecord, User, Wallet, WalletTransaction,
 		WorkflowExecution []ent.Hook
@@ -8512,9 +8797,10 @@ type (
 		CouponAssociation, CreditGrant, CreditGrantApplication, CreditNote,
 		CreditNoteLineItem, Customer, Entitlement, EntitlementGrant,
 		EntityIntegrationMapping, Environment, Feature, Group, IncomingWebhookEvent,
-		Invoice, InvoiceLineItem, InvoiceSequence, Meter, Payment, PaymentAttempt,
-		PaymentMethod, Plan, Price, PriceUnit, Refund, ScheduledTask, Secret, Settings,
-		Subscription, SubscriptionLineItem, SubscriptionPause, SubscriptionPhase,
+		Invoice, InvoiceLineItem, InvoicePublicReference, InvoiceReferenceAlias,
+		InvoiceSequence, Meter, Payment, PaymentAttempt, PaymentMethod, Plan, Price,
+		PriceUnit, Refund, ScheduledTask, Secret, Settings, Subscription,
+		SubscriptionLineItem, SubscriptionPause, SubscriptionPhase,
 		SubscriptionSchedule, SystemEvent, Task, TaxApplied, TaxAssociation, TaxRate,
 		Tenant, UsageRecord, User, Wallet, WalletTransaction,
 		WorkflowExecution []ent.Interceptor

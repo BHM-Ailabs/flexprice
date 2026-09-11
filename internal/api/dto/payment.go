@@ -111,6 +111,8 @@ type PaymentResponse struct {
 	VoidedAt               *time.Time                   `json:"voided_at,omitempty"`
 	ErrorMessage           *string                      `json:"error_message,omitempty"`
 	Attempts               []*PaymentAttemptResponse    `json:"attempts,omitempty"`
+	PublicReference        *string                      `json:"public_reference,omitempty"`
+	ReferenceAliases       []string                     `json:"reference_aliases,omitempty"`
 	InvoiceNumber          *string                      `json:"invoice_number,omitempty"`
 	TenantID               string                       `json:"tenant_id"`
 	SaveCardAndMakeDefault bool                         `json:"save_card_and_make_default"`

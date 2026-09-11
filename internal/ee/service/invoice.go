@@ -2823,7 +2823,12 @@ func (s *invoiceService) getInvoiceDataForPDFGen(
 	tenant *tenant.Tenant,
 ) (*pdf.InvoiceData, error) {
 	invoiceNum := ""
-	if inv.InvoiceNumber != nil {
+	if inv.PublicReference != nil {
+		invoiceNum = *inv.PublicReference
+		if invoiceNum == "" {
+			invoiceNum = "Number pending"
+		}
+	} else if inv.InvoiceNumber != nil {
 		invoiceNum = *inv.InvoiceNumber
 	}
 

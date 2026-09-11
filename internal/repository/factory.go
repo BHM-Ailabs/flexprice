@@ -3,6 +3,7 @@ package repository
 import (
 	"github.com/flexprice/flexprice/internal/cache"
 	"github.com/flexprice/flexprice/internal/clickhouse"
+	"github.com/flexprice/flexprice/internal/config"
 	"github.com/flexprice/flexprice/internal/domain/addon"
 	"github.com/flexprice/flexprice/internal/domain/addonassociation"
 	"github.com/flexprice/flexprice/internal/domain/alert"
@@ -72,6 +73,7 @@ func InitTracing(tracingSvc *tracing.Service) {
 type RepositoryParams struct {
 	fx.In
 
+	Config        *config.Configuration
 	Logger        *logger.Logger
 	EntClient     postgres.IClient
 	ClickHouseDB  *clickhouse.ClickHouseStore
@@ -148,7 +150,11 @@ func NewEnvironmentRepository(p RepositoryParams) environment.Repository {
 }
 
 func NewInvoiceRepository(p RepositoryParams) invoice.Repository {
-	return entRepo.NewInvoiceRepository(p.EntClient, p.Logger, p.RedisCache)
+	tenantID := ""
+	if p.Config != nil {
+		tenantID = p.Config.Auth.Plaqad.TenantID
+	}
+	return entRepo.NewInvoiceRepository(p.EntClient, p.Logger, p.RedisCache, tenantID)
 }
 
 func NewInvoiceLineItemRepository(p RepositoryParams) invoice.LineItemRepository {

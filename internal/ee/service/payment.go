@@ -379,9 +379,9 @@ func (s *paymentService) GetPayment(ctx context.Context, id string) (*dto.Paymen
 		if err != nil {
 			return nil, err
 		}
-		if invoice.InvoiceNumber != nil {
-			response.InvoiceNumber = invoice.InvoiceNumber
-		}
+		response.InvoiceNumber = invoice.InvoiceNumber
+		response.PublicReference = invoice.PublicReference
+		response.ReferenceAliases = invoice.ReferenceAliases
 	}
 	return response, nil
 }
@@ -501,6 +501,8 @@ func (s *paymentService) ListPayments(ctx context.Context, filter *types.Payment
 
 	// Create a map of invoice ID to invoice number
 	invoiceNumberMap := make(map[string]*string)
+	invoiceReferenceMap := make(map[string]*string)
+	invoiceAliasMap := make(map[string][]string)
 	if len(invoiceIDs) > 0 {
 		// Fetch all invoices in a single query
 		invoiceFilter := &types.InvoiceFilter{
@@ -513,6 +515,8 @@ func (s *paymentService) ListPayments(ctx context.Context, filter *types.Payment
 		}
 		for _, inv := range invoices {
 			invoiceNumberMap[inv.ID] = inv.InvoiceNumber
+			invoiceReferenceMap[inv.ID] = inv.PublicReference
+			invoiceAliasMap[inv.ID] = inv.ReferenceAliases
 		}
 	}
 
@@ -522,6 +526,8 @@ func (s *paymentService) ListPayments(ctx context.Context, filter *types.Payment
 		if p.DestinationType == types.PaymentDestinationTypeInvoice {
 			if invoiceNumber, exists := invoiceNumberMap[p.DestinationID]; exists {
 				response.InvoiceNumber = invoiceNumber
+				response.PublicReference = invoiceReferenceMap[p.DestinationID]
+				response.ReferenceAliases = invoiceAliasMap[p.DestinationID]
 			}
 		}
 		items[i] = response

@@ -34,5 +34,5 @@ func plaqadInvoicePDFCacheKey(inv *invoice.Invoice) string {
 	// Invoice contains only JSON-serializable domain values.
 	snapshot, _ := json.Marshal(inv)
 	fingerprint := sha256.Sum256(snapshot)
-	return fmt.Sprintf("%s/%s/plaqad-invoice-v1/%s/%x", inv.TenantID, inv.EnvironmentID, inv.ID, fingerprint[:16])
+	return fmt.Sprintf("%s/%s/plaqad-invoice-v2/%s/%x", inv.TenantID, inv.EnvironmentID, inv.ID, fingerprint[:16])
 }

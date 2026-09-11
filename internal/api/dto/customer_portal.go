@@ -59,6 +59,7 @@ func (r *PortalCostAnalyticsRequest) ToInternalRequest(externalCustomerID string
 
 // PortalPaginatedRequest represents a paginated request from the customer portal
 type PortalPaginatedRequest struct {
-	Page  int `form:"page" json:"page" example:"1"`
-	Limit int `form:"limit" json:"limit" example:"20"`
+	Search string `form:"search" json:"search,omitempty"`
+	Page   int    `form:"page" json:"page" example:"1"`
+	Limit  int    `form:"limit" json:"limit" example:"20"`
 }

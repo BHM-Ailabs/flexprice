@@ -1374,6 +1374,71 @@ var (
 			},
 		},
 	}
+	// InvoicePublicReferencesColumns holds the columns for the "invoice_public_references" table.
+	InvoicePublicReferencesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "tenant_id", Type: field.TypeString},
+		{Name: "environment_id", Type: field.TypeString},
+		{Name: "public_reference", Type: field.TypeString},
+		{Name: "reservation_key", Type: field.TypeString},
+		{Name: "invoice_id", Type: field.TypeString, Nullable: true},
+		{Name: "customer_id", Type: field.TypeString, Nullable: true},
+		{Name: "created_by", Type: field.TypeString, Default: ""},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "bound_at", Type: field.TypeTime, Nullable: true},
+	}
+	// InvoicePublicReferencesTable holds the schema information for the "invoice_public_references" table.
+	InvoicePublicReferencesTable = &schema.Table{
+		Name:       "invoice_public_references",
+		Columns:    InvoicePublicReferencesColumns,
+		PrimaryKey: []*schema.Column{InvoicePublicReferencesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "invoicepublicreference_tenant_id_environment_id_public_reference",
+				Unique:  true,
+				Columns: []*schema.Column{InvoicePublicReferencesColumns[1], InvoicePublicReferencesColumns[2], InvoicePublicReferencesColumns[3]},
+			},
+			{
+				Name:    "invoicepublicreference_tenant_id_environment_id_reservation_key",
+				Unique:  true,
+				Columns: []*schema.Column{InvoicePublicReferencesColumns[1], InvoicePublicReferencesColumns[2], InvoicePublicReferencesColumns[4]},
+			},
+			{
+				Name:    "invoicepublicreference_tenant_id_environment_id_invoice_id",
+				Unique:  true,
+				Columns: []*schema.Column{InvoicePublicReferencesColumns[1], InvoicePublicReferencesColumns[2], InvoicePublicReferencesColumns[5]},
+			},
+		},
+	}
+	// InvoiceReferenceAliasColumns holds the columns for the "invoice_reference_alias" table.
+	InvoiceReferenceAliasColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "tenant_id", Type: field.TypeString},
+		{Name: "environment_id", Type: field.TypeString},
+		{Name: "public_reference", Type: field.TypeString},
+		{Name: "alias", Type: field.TypeString},
+		{Name: "normalized_alias", Type: field.TypeString},
+		{Name: "created_by", Type: field.TypeString, Default: ""},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// InvoiceReferenceAliasTable holds the schema information for the "invoice_reference_alias" table.
+	InvoiceReferenceAliasTable = &schema.Table{
+		Name:       "invoice_reference_alias",
+		Columns:    InvoiceReferenceAliasColumns,
+		PrimaryKey: []*schema.Column{InvoiceReferenceAliasColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "invoicereferencealias_tenant_id_environment_id_normalized_alias",
+				Unique:  true,
+				Columns: []*schema.Column{InvoiceReferenceAliasColumns[1], InvoiceReferenceAliasColumns[2], InvoiceReferenceAliasColumns[5]},
+			},
+			{
+				Name:    "invoicereferencealias_tenant_id_environment_id_public_reference",
+				Unique:  false,
+				Columns: []*schema.Column{InvoiceReferenceAliasColumns[1], InvoiceReferenceAliasColumns[2], InvoiceReferenceAliasColumns[3]},
+			},
+		},
+	}
 	// InvoiceSequencesColumns holds the columns for the "invoice_sequences" table.
 	InvoiceSequencesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -2825,6 +2890,8 @@ var (
 		IncomingWebhookEventsTable,
 		InvoicesTable,
 		InvoiceLineItemsTable,
+		InvoicePublicReferencesTable,
+		InvoiceReferenceAliasTable,
 		InvoiceSequencesTable,
 		MetersTable,
 		PaymentsTable,

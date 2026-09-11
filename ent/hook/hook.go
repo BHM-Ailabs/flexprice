@@ -321,6 +321,30 @@ func (f InvoiceLineItemFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Va
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.InvoiceLineItemMutation", m)
 }
 
+// The InvoicePublicReferenceFunc type is an adapter to allow the use of ordinary
+// function as InvoicePublicReference mutator.
+type InvoicePublicReferenceFunc func(context.Context, *ent.InvoicePublicReferenceMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f InvoicePublicReferenceFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.InvoicePublicReferenceMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.InvoicePublicReferenceMutation", m)
+}
+
+// The InvoiceReferenceAliasFunc type is an adapter to allow the use of ordinary
+// function as InvoiceReferenceAlias mutator.
+type InvoiceReferenceAliasFunc func(context.Context, *ent.InvoiceReferenceAliasMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f InvoiceReferenceAliasFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.InvoiceReferenceAliasMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.InvoiceReferenceAliasMutation", m)
+}
+
 // The InvoiceSequenceFunc type is an adapter to allow the use of ordinary
 // function as InvoiceSequence mutator.
 type InvoiceSequenceFunc func(context.Context, *ent.InvoiceSequenceMutation) (ent.Value, error)

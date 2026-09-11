@@ -66,6 +66,10 @@ type Tx struct {
 	Invoice *InvoiceClient
 	// InvoiceLineItem is the client for interacting with the InvoiceLineItem builders.
 	InvoiceLineItem *InvoiceLineItemClient
+	// InvoicePublicReference is the client for interacting with the InvoicePublicReference builders.
+	InvoicePublicReference *InvoicePublicReferenceClient
+	// InvoiceReferenceAlias is the client for interacting with the InvoiceReferenceAlias builders.
+	InvoiceReferenceAlias *InvoiceReferenceAliasClient
 	// InvoiceSequence is the client for interacting with the InvoiceSequence builders.
 	InvoiceSequence *InvoiceSequenceClient
 	// Meter is the client for interacting with the Meter builders.
@@ -279,6 +283,8 @@ func (tx *Tx) init() {
 	tx.IncomingWebhookEvent = NewIncomingWebhookEventClient(tx.config)
 	tx.Invoice = NewInvoiceClient(tx.config)
 	tx.InvoiceLineItem = NewInvoiceLineItemClient(tx.config)
+	tx.InvoicePublicReference = NewInvoicePublicReferenceClient(tx.config)
+	tx.InvoiceReferenceAlias = NewInvoiceReferenceAliasClient(tx.config)
 	tx.InvoiceSequence = NewInvoiceSequenceClient(tx.config)
 	tx.Meter = NewMeterClient(tx.config)
 	tx.Payment = NewPaymentClient(tx.config)

@@ -75,7 +75,7 @@ func plaqadPDFInvoiceFixture() *invoice.Invoice {
 func TestPlaqadInvoicePDFCacheKey(t *testing.T) {
 	baseline := plaqadPDFInvoiceFixture()
 	key := plaqadInvoicePDFCacheKey(baseline)
-	require.Contains(t, key, "tenant_plaqad/env_production/plaqad-invoice-v1/inv_01ABC9/")
+	require.Contains(t, key, "tenant_plaqad/env_production/plaqad-invoice-v2/inv_01ABC9/")
 	require.Len(t, key[strings.LastIndex(key, "/")+1:], 32)
 	require.NotEqual(t, "tenant_plaqad/inv_01ABC9", key)
 	require.Equal(t, key, plaqadInvoicePDFCacheKey(plaqadPDFInvoiceFixture()))

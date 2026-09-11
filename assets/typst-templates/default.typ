@@ -218,10 +218,29 @@
       #text(weight: "semibold", size: 11pt)[From]
       #v(0.3em)
       #text(weight: "semibold", size: 10pt)[#biller.name] \
+      #if biller.at("plaqad-public-contacts", default: false) {
+        let address = biller.at("address", default: (:))
+        for value in (
+          biller.at("email", default: ""),
+          biller.at("phone", default: ""),
+          biller.at("website", default: ""),
+          address.at("street", default: ""),
+          address.at("city", default: ""),
+          address.at("state", default: ""),
+          address.at("postal-code", default: ""),
+          address.at("country", default: ""),
+        ) {
+          if value != none and value != "" {
+            text(weight: "regular", size: 9pt, fill: rgb("#666666"))[#value]
+            linebreak()
+          }
+        }
+      } else [
       #text(weight: "regular", size: 9pt, fill: rgb("#666666"))[#biller.at("email", default: "--")] \
       #text(weight: "regular", size: 9pt, fill: rgb("#666666"))[#biller.at("address", default: (:)).at("street", default: "--")] \
       #text(weight: "regular", size: 9pt, fill: rgb("#666666"))[#biller.at("address", default: (:)).at("city", default: "--")] \
       #text(weight: "regular", size: 9pt, fill: rgb("#666666"))[#biller.at("address", default: (:)).at("postal-code", default: "--")]
+      ]
     ],
     [
       #text(weight: "semibold", size: 11pt)[Bill to]
@@ -550,7 +569,7 @@
   v(3em)
   align(bottom,   align(center, text(size: 8pt)[
     #biller.name
-    #{if biller.at("website", default: "") != "" {[ ⋅ #link("https://" + biller.website)[#biller.website]]}}
+    #{if biller.at("website", default: "") != "" {[ ⋅ #link(if biller.at("plaqad-public-contacts", default: false) { biller.website } else { "https://" + biller.website })[#biller.website]]}}
     #{if biller.at("help-email", default: "") != "" {[ ⋅ #link("mailto:" + biller.help-email)[#biller.help-email]]}}
   ]))
 
