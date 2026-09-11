@@ -182,3 +182,30 @@ func TestRevenueDashboardIncludesUndatedReceiptsWithoutInventingEarnedRevenue(t 
 	require.NoError(t, err)
 	require.Empty(t, filtered.Collections)
 }
+
+func TestRevenueDashboardCollectionUsesRecordedBalancesIncludingRefunds(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 1, 0)
+	laterPaid := end.AddDate(0, 0, 5)
+	for _, tc := range []struct {
+		name            string
+		status          types.PaymentStatus
+		paid, remaining int64
+	}{
+		{"unpaid", types.PaymentStatusPending, 0, 20},
+		{"part-paid", types.PaymentStatusPending, 5, 15},
+		{"paid-after-cohort", types.PaymentStatusSucceeded, 20, 0},
+		{"refunded-recorded-balance", types.PaymentStatusRefunded, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := &domaininvoice.Invoice{ID: "inv-balance", CustomerID: "cust-balance", InvoiceType: types.InvoiceTypeOneOff, IssueDate: &start, PaidAt: &laterPaid, Currency: "NGN", AmountDue: decimal.NewFromInt(20), AmountPaid: decimal.NewFromInt(tc.paid), AmountRemaining: decimal.NewFromInt(tc.remaining), PaymentStatus: tc.status}
+			svc := &dashboardService{}
+			totals, graphs, _, _, err := svc.buildRevenueDashboardAnalytics(context.Background(), dto.RevenueDashboardRequest{PeriodStart: start, PeriodEnd: end}, []*domaininvoice.Invoice{inv}, nil)
+			require.NoError(t, err)
+			require.Equal(t, decimal.NewFromInt(tc.paid).String(), totals["ngn"].TotalPaid.String())
+			require.Equal(t, decimal.NewFromInt(tc.remaining).String(), totals["ngn"].TotalUnpaid.String())
+			require.Equal(t, totals["ngn"].TotalPaid.String(), graphs["ngn"].Paid[0].Value)
+			require.Equal(t, "2026-09-01", graphs["ngn"].Paid[0].Label)
+		})
+	}
+}
