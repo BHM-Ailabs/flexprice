@@ -1152,6 +1152,15 @@ func (o InvoiceQueryOptions) applyEntityQueryOptions(_ context.Context, f *types
 		}
 	}
 
+	if f.ReportingDateGTE != nil {
+		at := *f.ReportingDateGTE
+		query = query.Where(invoiceReportingDatePredicate(invoice.PeriodStartGTE(at), invoice.IssueDateGTE(at), invoice.FinalizedAtGTE(at), invoice.CreatedAtGTE(at)))
+	}
+	if f.ReportingDateLT != nil {
+		at := *f.ReportingDateLT
+		query = query.Where(invoiceReportingDatePredicate(invoice.PeriodStartLT(at), invoice.IssueDateLT(at), invoice.FinalizedAtLT(at), invoice.CreatedAtLT(at)))
+	}
+
 	// Apply invoice period filters (period_start / period_end GTE/LTE)
 	if f.PeriodStartGTE != nil {
 		query = query.Where(invoice.PeriodStartGTE(*f.PeriodStartGTE))
@@ -1479,4 +1488,11 @@ func (r *invoiceRepository) GetInvoicePaymentStatus(ctx context.Context) (*types
 
 	SetSpanSuccess(span)
 	return &result, nil
+}
+
+// Keep the fallback order aligned with domain Invoice.ReportingDate.
+func invoiceReportingDatePredicate(period, issued, finalized, created predicate.Invoice) predicate.Invoice {
+	return invoice.Or(period, invoice.And(invoice.PeriodStartIsNil(), invoice.InvoiceTypeEQ(types.InvoiceTypeOneOff),
+		invoice.Or(issued, invoice.And(invoice.IssueDateIsNil(), finalized),
+			invoice.And(invoice.IssueDateIsNil(), invoice.FinalizedAtIsNil(), created))))
 }

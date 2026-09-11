@@ -79,6 +79,14 @@ func (s *PaymentService) CreatePaymentLink(
 			Mark(ierr.ErrValidation)
 	}
 
+	var channels []string
+	if req.SaveCardAndMakeDefault {
+		if invoiceResp.InvoiceType != types.InvoiceTypeSubscription || invoiceResp.SubscriptionID == nil || *invoiceResp.SubscriptionID == "" {
+			return nil, ierr.NewError("saving a Paystack card requires a subscription invoice").Mark(ierr.ErrValidation)
+		}
+		channels = []string{"card"}
+	}
+
 	reference := referenceForPaymentID(req.PaymentID)
 	metadata := map[string]any{
 		"flexprice_payment_id":  req.PaymentID,
@@ -91,6 +99,7 @@ func (s *PaymentService) CreatePaymentLink(
 	}
 
 	result, err := s.client.InitializeTransaction(ctx, InitializeTransactionRequest{
+		Channels:    channels,
 		Email:       customerResp.Email,
 		Amount:      types.ToSmallestUnit(req.Amount, req.Currency),
 		Currency:    strings.ToUpper(req.Currency),

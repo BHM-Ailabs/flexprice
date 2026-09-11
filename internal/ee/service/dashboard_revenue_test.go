@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"github.com/flexprice/flexprice/internal/testutil"
 	"testing"
 	"time"
 
@@ -123,4 +125,60 @@ func TestRevenueDashboardGraphPointsRemainCurrencySafeAndSortable(t *testing.T) 
 	assert.Equal(t, "2026-01", points[0].Label)
 	assert.Equal(t, "10", points[0].Value)
 	assert.Equal(t, "2026-02", points[1].Label)
+}
+
+func TestRevenueDashboardIncludesUndatedReceiptsWithoutInventingEarnedRevenue(t *testing.T) {
+	ctx := types.SetEnvironmentID(types.SetTenantID(context.Background(), "tenant-report"), "production")
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 1, 0)
+	issued := start.Add(10*24*time.Hour + 13*time.Hour)
+	paid := issued.Add(5 * time.Minute)
+	store := testutil.NewInMemoryInvoiceStore()
+	customers := testutil.NewInMemoryCustomerStore()
+	service := &dashboardService{ServiceParams: ServiceParams{InvoiceRepo: store, CustomerRepo: customers, SettingsRepo: testutil.NewInMemorySettingsStore()}}
+	receipt := &domaininvoice.Invoice{
+		ID: "inv_01M289DH22TNWMPDC0GF6TPTMX", CustomerID: "cust_01M1SS60WJMJM3CWPRNWDJ3NEG", InvoiceType: types.InvoiceTypeOneOff,
+		InvoiceStatus: types.InvoiceStatusFinalized, PaymentStatus: types.PaymentStatusSucceeded, Currency: "NGN",
+		AmountDue: decimal.RequireFromString("331494.06"), AmountPaid: decimal.RequireFromString("331494.06"), AmountRemaining: decimal.Zero,
+		FinalizedAt: &issued, PaidAt: &paid, EnvironmentID: "production", BaseModel: types.GetDefaultBaseModel(ctx),
+		LineItems: []*domaininvoice.InvoiceLineItem{{Amount: decimal.RequireFromString("331494.06"), Currency: "NGN"}},
+	}
+	require.NoError(t, store.Create(ctx, receipt))
+	// A dated subscription ending at the exact exclusive window boundary belongs
+	// to this service period, but an invoice starting at that boundary does not.
+	subscription := *receipt
+	subscription.ID = "dated-subscription"
+	subscription.Currency = "usd"
+	subscription.PeriodStart, subscription.PeriodEnd = &start, &end
+	subscription.InvoiceType = types.InvoiceTypeSubscription
+	subscription.AmountDue, subscription.AmountPaid, subscription.AmountRemaining = decimal.NewFromInt(20), decimal.NewFromInt(5), decimal.NewFromInt(15)
+	subscription.PaymentStatus = types.PaymentStatusPartiallyRefunded
+	subscription.LineItems = []*domaininvoice.InvoiceLineItem{{Amount: decimal.NewFromInt(20), Currency: "usd", PeriodStart: &start, PeriodEnd: &end}}
+	require.NoError(t, store.Create(ctx, &subscription))
+	outside := *receipt
+	outside.ID, outside.IssueDate = "next-period", &end
+	require.NoError(t, store.Create(ctx, &outside))
+	draft := *receipt
+	draft.ID, draft.InvoiceStatus = "draft", types.InvoiceStatusDraft
+	require.NoError(t, store.Create(ctx, &draft))
+	req := dto.RevenueDashboardRequest{PeriodStart: start, PeriodEnd: end}
+	got, err := service.GetRevenueDashboard(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, "331494.06", got.Collections["ngn"].TotalPaid.String())
+	require.Equal(t, 1, got.Collections["ngn"].InvoiceCount)
+	require.Equal(t, "331494.06", got.Graphs["ngn"].Paid[0].Value)
+	require.Empty(t, got.Graphs["ngn"].TotalRevenue)
+	require.NotContains(t, got.Summaries, "ngn", "prepaid purchase is not proof of service delivery")
+	require.Equal(t, "20", got.Summaries["usd"].TotalRevenue.String())
+	require.Equal(t, "20", got.Graphs["usd"].TotalRevenue[0].Value)
+	require.Equal(t, "5", got.Collections["usd"].TotalPaid.String(), "use recorded balances without fabricating refund accounting")
+	require.Equal(t, "15", got.Collections["usd"].TotalUnpaid.String())
+	require.Equal(t, "5", got.Graphs["usd"].Paid[0].Value)
+	again, err := service.GetRevenueDashboard(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, got, again, "report reads do not change financial records")
+	req.CustomerIDs = []string{"absent"}
+	filtered, err := service.GetRevenueDashboard(ctx, req)
+	require.NoError(t, err)
+	require.Empty(t, filtered.Collections)
 }

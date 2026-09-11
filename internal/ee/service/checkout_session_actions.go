@@ -71,15 +71,16 @@ func (s *checkoutSessionService) callCheckoutProvider(
 	}
 
 	req := interfaces.CheckoutProviderRequest{
-		InvoiceID:  *session.CheckoutInvoiceID,
-		CustomerID: session.CustomerID,
-		Amount:     payResp.Amount,
-		Currency:   payResp.Currency,
-		PaymentID:  payResp.ID,
-		SuccessURL: lo.FromPtr(session.SuccessURL),
-		FailureURL: lo.FromPtr(session.FailureURL),
-		CancelURL:  lo.FromPtr(session.CancelURL),
-		Metadata:   session.Metadata,
+		SaveCardAndMakeDefault: payResp.SaveCardAndMakeDefault,
+		InvoiceID:              *session.CheckoutInvoiceID,
+		CustomerID:             session.CustomerID,
+		Amount:                 payResp.Amount,
+		Currency:               payResp.Currency,
+		PaymentID:              payResp.ID,
+		SuccessURL:             lo.FromPtr(session.SuccessURL),
+		FailureURL:             lo.FromPtr(session.FailureURL),
+		CancelURL:              lo.FromPtr(session.CancelURL),
+		Metadata:               session.Metadata,
 	}
 
 	cfg := lo.FromPtr(session.PaymentProviderConfig.ToCheckoutPaymentProviderConfig())

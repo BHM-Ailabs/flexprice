@@ -541,6 +541,13 @@ func invoiceFilterFn(ctx context.Context, inv *invoice.Invoice, filter interface
 		}
 	}
 
+	if f.ReportingDateGTE != nil && (inv.ReportingDate() == nil || inv.ReportingDate().Before(*f.ReportingDateGTE)) {
+		return false
+	}
+	if f.ReportingDateLT != nil && (inv.ReportingDate() == nil || !inv.ReportingDate().Before(*f.ReportingDateLT)) {
+		return false
+	}
+
 	// Filter by period_start_gte (periodStart >= value)
 	if f.PeriodStartGTE != nil {
 		if inv.PeriodStart == nil || inv.PeriodStart.Before(*f.PeriodStartGTE) {

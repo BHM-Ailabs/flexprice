@@ -16,7 +16,8 @@ type CheckoutAdapter struct {
 
 func (a *CheckoutAdapter) CreatePaymentLink(ctx context.Context, req interfaces.CheckoutProviderRequest) (*interfaces.CheckoutProviderResponse, error) {
 	result, err := a.Svc.CreatePaymentLink(ctx, &CreatePaymentLinkRequest{
-		InvoiceID: req.InvoiceID, CustomerID: req.CustomerID, Amount: req.Amount,
+		SaveCardAndMakeDefault: req.SaveCardAndMakeDefault,
+		InvoiceID:              req.InvoiceID, CustomerID: req.CustomerID, Amount: req.Amount,
 		Currency: req.Currency, SuccessURL: req.SuccessURL, CancelURL: req.CancelURL,
 		Metadata: req.Metadata, PaymentID: req.PaymentID,
 	}, a.CustomerSvc, a.InvoiceSvc)

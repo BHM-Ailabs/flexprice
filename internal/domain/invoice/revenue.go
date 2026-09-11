@@ -3,6 +3,8 @@ package invoice
 import (
 	"time"
 
+	"github.com/flexprice/flexprice/internal/types"
+
 	"github.com/shopspring/decimal"
 )
 
@@ -48,4 +50,22 @@ type RevenueTimeSeriesRow struct {
 type VoiceMinutesTimeSeriesRow struct {
 	WindowStart time.Time
 	UsageMs     decimal.Decimal
+}
+
+// ReportingDate groups service-period invoices by period start and undated
+// one-offs by their issued date. It does not establish earned revenue.
+func (i *Invoice) ReportingDate() *time.Time {
+	if i.PeriodStart != nil {
+		return i.PeriodStart
+	}
+	if i.InvoiceType != types.InvoiceTypeOneOff {
+		return nil
+	}
+	if i.IssueDate != nil {
+		return i.IssueDate
+	}
+	if i.FinalizedAt != nil {
+		return i.FinalizedAt
+	}
+	return &i.CreatedAt
 }

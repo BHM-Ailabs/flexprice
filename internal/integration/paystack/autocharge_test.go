@@ -10,7 +10,9 @@ import (
 
 	"github.com/flexprice/flexprice/internal/api/dto"
 	domainCheckout "github.com/flexprice/flexprice/internal/domain/checkout"
+	"github.com/flexprice/flexprice/internal/domain/customer"
 	"github.com/flexprice/flexprice/internal/domain/invoice"
+	"github.com/flexprice/flexprice/internal/domain/subscription"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/logger"
@@ -24,6 +26,7 @@ import (
 
 type fakeClient struct {
 	Client
+	initialized []InitializeTransactionRequest
 	verified    *TransactionData
 	verifyErr   error
 	verifyCalls int
@@ -120,6 +123,7 @@ const (
 
 func webhookFixtures(authorization *TransactionAuthorization) (*WebhookHandler, *fakeSubscriptionService, *interfaces.ServiceDependencies, *WebhookEvent) {
 	verified := &TransactionData{
+		Channel:       "card",
 		ID:            9911,
 		Status:        transactionStatusSuccess,
 		Reference:     "fp-pay-test",
@@ -134,14 +138,16 @@ func webhookFixtures(authorization *TransactionAuthorization) (*WebhookHandler, 
 	subscriptionSvc := &fakeSubscriptionService{}
 	services := &interfaces.ServiceDependencies{
 		PaymentService: &fakePaymentService{payment: &dto.PaymentResponse{
-			ID:              testPaymentID,
-			DestinationType: types.PaymentDestinationTypeInvoice,
-			DestinationID:   testInvoiceID,
-			Amount:          decimal.NewFromInt(50),
-			Currency:        "NGN",
+			ID:                     testPaymentID,
+			SaveCardAndMakeDefault: true,
+			DestinationType:        types.PaymentDestinationTypeInvoice,
+			DestinationID:          testInvoiceID,
+			Amount:                 decimal.NewFromInt(50),
+			Currency:               "NGN",
 		}},
 		InvoiceService: &fakeInvoiceService{invoice: &dto.InvoiceResponse{Invoice: invoice.Invoice{
 			ID:             testInvoiceID,
+			InvoiceType:    types.InvoiceTypeSubscription,
 			CustomerID:     testCustomerID,
 			SubscriptionID: lo.ToPtr(testSubscriptionID),
 		}}},
@@ -182,13 +188,14 @@ func TestWebhookStoresReusableAuthorization(t *testing.T) {
 	require.Equal(t, testSubscriptionID, saved.subscriptionID)
 	require.Equal(t, testAuthCode, saved.gatewayID)
 	require.Equal(t, map[string]string{
-		MetadataKeyCustomerEmail: "payer@example.com",
-		MetadataKeyCardLast4:     "4081",
-		MetadataKeyCardType:      "visa",
-		MetadataKeyCardBank:      "Test Bank",
-		MetadataKeyCardExpMonth:  "12",
-		MetadataKeyCardExpYear:   "2030",
-		MetadataKeyCapturedAt:    "2026-08-18T12:30:00Z",
+		MetadataKeyCustomerEmail:     "payer@example.com",
+		MetadataKeyCardLast4:         "4081",
+		MetadataKeyCardType:          "visa",
+		MetadataKeyCardBank:          "Test Bank",
+		MetadataKeyCardExpMonth:      "12",
+		MetadataKeyCardExpYear:       "2030",
+		MetadataKeyCapturedAt:        "2026-08-18T12:30:00Z",
+		"paystack_save_card_consent": "true",
 	}, saved.metadata)
 }
 
@@ -418,4 +425,70 @@ func pendingInvoiceService() *fakeInvoiceService {
 		InvoiceStatus:   types.InvoiceStatusFinalized,
 		AmountRemaining: decimal.NewFromInt(50),
 	}}}
+}
+
+func (s *fakeSubscriptionService) GetSubscription(_ context.Context, id string) (*dto.SubscriptionResponse, error) {
+	return &dto.SubscriptionResponse{Subscription: &subscription.Subscription{ID: id, CustomerID: testCustomerID, BillingCadence: types.BILLING_CADENCE_RECURRING, BillingPeriod: types.BILLING_PERIOD_MONTHLY}}, nil
+}
+
+func TestWebhookRequiresStoredConsentAndRecurringCardInvoice(t *testing.T) {
+	for _, name := range []string{"no-consent", "one-off", "non-card"} {
+		t.Run(name, func(t *testing.T) {
+			handler, subscriptionSvc, services, _ := webhookFixtures(&TransactionAuthorization{AuthorizationCode: testAuthCode, Reusable: true, Last4: "4081"})
+			txn := handler.client.(*fakeClient).verified
+			payment := services.PaymentService.(*fakePaymentService).payment
+			switch name {
+			case "no-consent":
+				payment.SaveCardAndMakeDefault = false
+			case "one-off":
+				services.InvoiceService.(*fakeInvoiceService).invoice.InvoiceType = types.InvoiceTypeOneOff
+			case "non-card":
+				txn.Channel = "bank_transfer"
+			}
+			require.NoError(t, handler.captureReusableAuthorization(context.Background(), txn, payment, services))
+			require.Empty(t, subscriptionSvc.saved)
+		})
+	}
+}
+
+func (c *fakeClient) InitializeTransaction(_ context.Context, req InitializeTransactionRequest) (*InitializeTransactionData, error) {
+	c.initialized = append(c.initialized, req)
+	return &InitializeTransactionData{Reference: req.Reference, AuthorizationURL: "https://checkout.paystack.com/test"}, nil
+}
+
+type checkoutCustomerService struct{ interfaces.CustomerService }
+
+func (c *checkoutCustomerService) GetCustomer(_ context.Context, _ string) (*dto.CustomerResponse, error) {
+	return &dto.CustomerResponse{Customer: &customer.Customer{ID: testCustomerID, Email: "payer@example.com"}}, nil
+}
+func TestCheckoutRestrictsOnlyConsentedSubscriptionToCard(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		consent   bool
+		kind      types.InvoiceType
+		wantError bool
+	}{
+		{"recurring-card", true, types.InvoiceTypeSubscription, false},
+		{"one-off-no-save", false, types.InvoiceTypeOneOff, false},
+		{"reject-one-off-save", true, types.InvoiceTypeOneOff, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeClient{}
+			service := NewPaymentService(client, logger.NewNoopLogger())
+			inv := &fakeInvoiceService{invoice: &dto.InvoiceResponse{Invoice: invoice.Invoice{ID: testInvoiceID, CustomerID: testCustomerID, InvoiceType: tc.kind, SubscriptionID: lo.ToPtr(testSubscriptionID), Currency: "NGN", AmountRemaining: decimal.NewFromInt(50)}}}
+			_, err := service.CreatePaymentLink(context.Background(), &CreatePaymentLinkRequest{InvoiceID: testInvoiceID, CustomerID: testCustomerID, Amount: decimal.NewFromInt(50), Currency: "NGN", PaymentID: testPaymentID, SaveCardAndMakeDefault: tc.consent}, &checkoutCustomerService{}, inv)
+			if tc.wantError {
+				require.Error(t, err)
+				require.Empty(t, client.initialized)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, client.initialized, 1)
+			if tc.consent {
+				require.Equal(t, []string{"card"}, client.initialized[0].Channels)
+			} else {
+				require.Nil(t, client.initialized[0].Channels)
+			}
+		})
+	}
 }

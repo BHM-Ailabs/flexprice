@@ -794,6 +794,8 @@ func (r *ActivateDraftSubscriptionRequest) Validate() error {
 }
 
 type SubscriptionResponse struct {
+	PaymentMethodReady bool                        `json:"payment_method_ready"`
+	PaymentMethod      *SubscriptionCardDescriptor `json:"payment_method"`
 	*subscription.Subscription
 	Plan     *PlanResponse     `json:"plan"`
 	Customer *CustomerResponse `json:"customer"`
@@ -823,6 +825,7 @@ type SubscriptionResponse struct {
 func (r SubscriptionResponse) MarshalJSON() ([]byte, error) {
 	type alias SubscriptionResponse
 	clone := alias(r)
+	clone.PaymentMethodReady, clone.PaymentMethod = subscriptionCardDescriptor(r.Subscription)
 	clone.Subscription = redactSubscriptionGatewayPaymentMethod(r.Subscription)
 	return json.Marshal(clone)
 }
@@ -844,6 +847,8 @@ type ListSubscriptionsResponse = types.ListResponse[*SubscriptionResponse] // @n
 // SubscriptionResponseV2 represents the V2 response for a subscription
 // with optional expanded fields based on the request expand parameter
 type SubscriptionResponseV2 struct {
+	PaymentMethodReady bool                        `json:"payment_method_ready"`
+	PaymentMethod      *SubscriptionCardDescriptor `json:"payment_method"`
 	*subscription.Subscription
 
 	// Plan is expanded only if "plan" is in expand parameter
@@ -879,6 +884,7 @@ type SubscriptionResponseV2 struct {
 func (r SubscriptionResponseV2) MarshalJSON() ([]byte, error) {
 	type alias SubscriptionResponseV2
 	clone := alias(r)
+	clone.PaymentMethodReady, clone.PaymentMethod = subscriptionCardDescriptor(r.Subscription)
 	clone.Subscription = redactSubscriptionGatewayPaymentMethod(r.Subscription)
 	return json.Marshal(clone)
 }
@@ -2106,4 +2112,32 @@ type TriggerSubscriptionWorkflowResponse struct {
 	WorkflowID string `json:"workflow_id"`
 	RunID      string `json:"run_id"`
 	Message    string `json:"message"`
+}
+
+// SubscriptionCardDescriptor is safe for customer display. Provider authorization
+// codes and customer tokens are never included. Unverified gateways stay unavailable.
+type SubscriptionCardDescriptor struct {
+	Type        string  `json:"type"`
+	Brand       *string `json:"brand"`
+	Last4       *string `json:"last4"`
+	ExpiryMonth *string `json:"expiry_month"`
+	ExpiryYear  *string `json:"expiry_year"`
+}
+
+func subscriptionCardDescriptor(sub *subscription.Subscription) (bool, *SubscriptionCardDescriptor) {
+	if sub == nil || !types.IsPaystackAuthorizationCode(lo.FromPtr(sub.GatewayPaymentMethodID)) || sub.Metadata["paystack_save_card_consent"] != "true" || sub.Metadata["paystack_customer_email"] == "" || sub.BillingCadence != types.BILLING_CADENCE_RECURRING || sub.BillingPeriod == types.BILLING_PERIOD_ONETIME {
+		return false, nil
+	}
+	bounded := func(value string, max int) *string {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > max || strings.Contains(value, "AUTH_") {
+			return nil
+		}
+		return &value
+	}
+	last4 := sub.Metadata["paystack_card_last4"]
+	if len(last4) != 4 || strings.IndexFunc(last4, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		last4 = ""
+	}
+	return true, &SubscriptionCardDescriptor{Type: "card", Brand: bounded(sub.Metadata["paystack_card_type"], 32), Last4: bounded(last4, 4), ExpiryMonth: bounded(sub.Metadata["paystack_card_exp_month"], 2), ExpiryYear: bounded(sub.Metadata["paystack_card_exp_year"], 4)}
 }

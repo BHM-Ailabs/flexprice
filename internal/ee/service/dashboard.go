@@ -210,12 +210,28 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 	// Step 1: Check custom analytics config for CPM / voice minutes
 	meterID, hasCustomAnalytics := s.resolveVoiceMeterID(ctx)
 
-	// Step 2: Fetch revenue data
-	revenueRows, err := s.InvoiceLineItemRepo.GetRevenueByCustomer(ctx, req.PeriodStart, req.PeriodEnd, req.CustomerIDs)
+	// Use the same invoice cohort for totals, service-period revenue, graphs,
+	// and leaderboards. Undated prepaid lines remain outside earned revenue.
+	invoices, err := s.listRevenueDashboardInvoices(ctx, req)
 	if err != nil {
-		return nil, ierr.WithError(err).
-			WithHint("failed to fetch revenue by customer").
-			Mark(ierr.ErrDatabase)
+		return nil, err
+	}
+	revenueRows := []domaininvoice.RevenueByCustomerRow{}
+	for _, inv := range invoices {
+		for _, line := range inv.LineItems {
+			if line == nil || !revenueDashboardLineItemInPeriod(line, req.PeriodStart, req.PeriodEnd) {
+				continue
+			}
+			currency := strings.TrimSpace(line.Currency)
+			if currency == "" {
+				currency = inv.Currency
+			}
+			priceType := ""
+			if line.PriceType != nil {
+				priceType = *line.PriceType
+			}
+			revenueRows = append(revenueRows, domaininvoice.RevenueByCustomerRow{CustomerID: inv.CustomerID, Currency: currency, PriceType: priceType, Amount: line.Amount})
+		}
 	}
 
 	var voiceRows []domaininvoice.VoiceMinutesRow
@@ -263,11 +279,6 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 		for key, cd := range customerMap {
 			cd.voiceMs = voiceByCustomer[key.customerID]
 		}
-	}
-
-	invoices, err := s.listRevenueDashboardInvoices(ctx, req)
-	if err != nil {
-		return nil, err
 	}
 
 	// Step 4: Bulk-fetch customer details for enrichment. Include customers that
@@ -382,13 +393,6 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 	if hasCustomAnalytics && meterID != "" && len(summaries) == 1 {
 		const dateTruncMonth = "month"
 
-		revenueTS, tsErr := s.InvoiceLineItemRepo.GetRevenueTimeSeries(ctx, req.PeriodStart, req.PeriodEnd, dateTruncMonth, req.CustomerIDs)
-		if tsErr != nil {
-			return nil, ierr.WithError(tsErr).
-				WithHint("failed to fetch revenue time series for graph").
-				Mark(ierr.ErrDatabase)
-		}
-
 		voiceTS, vErr := s.InvoiceLineItemRepo.GetVoiceMinutesTimeSeries(ctx, req.PeriodStart, req.PeriodEnd, meterID, dateTruncMonth, req.CustomerIDs)
 		if vErr != nil {
 			return nil, ierr.WithError(vErr).
@@ -396,9 +400,8 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 				Mark(ierr.ErrDatabase)
 		}
 
-		revenueByWindow := aggregateRevenueDashboardByWindow(revenueTS)
 		legacyGraph = &dto.RevenueDashboardGraph{
-			TotalRevenue: buildRevenueDashboardGraphPoints(revenueByWindow),
+			TotalRevenue: []types.RevenueGraphPoint{},
 			Invoiced:     []types.RevenueGraphPoint{},
 			Paid:         []types.RevenueGraphPoint{},
 			VoiceMinutes: buildVoiceMinutesDashboardGraphPoints(voiceTS),
@@ -413,6 +416,12 @@ func (s *dashboardService) GetRevenueDashboard(ctx context.Context, req dto.Reve
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	if legacyGraph != nil {
+		for currency := range summaries {
+			legacyGraph.TotalRevenue = graphs[currency].TotalRevenue
+		}
 	}
 
 	return &dto.RevenueDashboardResponse{
@@ -430,11 +439,10 @@ func (s *dashboardService) listRevenueDashboardInvoices(
 	ctx context.Context,
 	req dto.RevenueDashboardRequest,
 ) ([]*domaininvoice.Invoice, error) {
-	periodEndInclusive := req.PeriodEnd.Add(-time.Nanosecond)
 	filter := types.NewNoLimitInvoiceFilter()
 	filter.InvoiceStatus = []types.InvoiceStatus{types.InvoiceStatusFinalized}
-	filter.PeriodStartGTE = &req.PeriodStart
-	filter.PeriodStartLTE = &periodEndInclusive
+	filter.ReportingDateGTE = &req.PeriodStart
+	filter.ReportingDateLT = &req.PeriodEnd
 	filter.SkipLineItems = false
 
 	invoices, err := s.InvoiceRepo.List(ctx, filter)
@@ -551,8 +559,8 @@ func (s *dashboardService) buildRevenueDashboardAnalytics(
 		workspaceSets[currency][invoice.CustomerID] = struct{}{}
 
 		graph := ensureRevenueDashboardGraphData(graphData, currency)
-		if invoice.PeriodStart != nil {
-			bucket := revenueDashboardBucketStart(*invoice.PeriodStart, windowSize)
+		if date := invoice.ReportingDate(); date != nil {
+			bucket := revenueDashboardBucketStart(*date, windowSize)
 			graph.Invoiced[bucket] = graph.Invoiced[bucket].Add(invoice.AmountDue)
 			graph.Paid[bucket] = graph.Paid[bucket].Add(invoice.AmountPaid)
 		}
@@ -739,7 +747,7 @@ func revenueDashboardLineItemInPeriod(
 	if lineItem.PeriodStart == nil || lineItem.PeriodEnd == nil {
 		return false
 	}
-	return !lineItem.PeriodStart.Before(periodStart) && lineItem.PeriodEnd.Before(periodEnd)
+	return !lineItem.PeriodStart.Before(periodStart) && lineItem.PeriodStart.Before(periodEnd) && !lineItem.PeriodEnd.After(periodEnd)
 }
 
 func revenueDashboardBucketStart(t time.Time, windowSize types.WindowSize) time.Time {

@@ -460,6 +460,11 @@ type InvoiceFilter struct {
 	// Useful for finding invoices that still have significant unpaid amounts
 	AmountRemainingGt *decimal.Decimal `json:"amount_remaining_gt,omitempty" form:"amount_remaining_gt"`
 
+	// reporting_date uses period_start, or issue_date/finalized_at/created_at for
+	// undated one-off invoices. The range is half-open [gte, lt).
+	ReportingDateGTE *time.Time `json:"reporting_date_gte,omitempty" form:"reporting_date_gte"`
+	ReportingDateLT  *time.Time `json:"reporting_date_lt,omitempty" form:"reporting_date_lt"`
+
 	// period_start_gte filters invoices with period_start >= value
 	PeriodStartGTE *time.Time `json:"period_start_gte,omitempty" form:"period_start_gte" validate:"omitempty,time_rfc3339"`
 	// period_start_lte filters invoices with period_start <= value

@@ -3,6 +3,7 @@ package paystack
 import "github.com/shopspring/decimal"
 
 type InitializeTransactionRequest struct {
+	Channels    []string       `json:"channels,omitempty"`
 	Email       string         `json:"email"`
 	Amount      int64          `json:"amount"`
 	Currency    string         `json:"currency"`
@@ -24,6 +25,7 @@ type initializeTransactionResponse struct {
 }
 
 type TransactionData struct {
+	Channel       string                    `json:"channel"`
 	ID            uint64                    `json:"id"`
 	Status        string                    `json:"status"`
 	Reference     string                    `json:"reference"`
@@ -103,14 +105,15 @@ type ChargeAuthorizationResult struct {
 }
 
 type CreatePaymentLinkRequest struct {
-	InvoiceID  string
-	CustomerID string
-	Amount     decimal.Decimal
-	Currency   string
-	SuccessURL string
-	CancelURL  string
-	Metadata   map[string]string
-	PaymentID  string
+	SaveCardAndMakeDefault bool
+	InvoiceID              string
+	CustomerID             string
+	Amount                 decimal.Decimal
+	Currency               string
+	SuccessURL             string
+	CancelURL              string
+	Metadata               map[string]string
+	PaymentID              string
 }
 
 type PaymentLinkResponse struct {

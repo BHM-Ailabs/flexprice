@@ -125,6 +125,10 @@ func (h *WebhookHandler) captureReusableAuthorization(
 	paymentResp *dto.PaymentResponse,
 	services *interfaces.ServiceDependencies,
 ) error {
+	// Consent comes from the persisted payment request, never webhook metadata.
+	if paymentResp == nil || !paymentResp.SaveCardAndMakeDefault || transaction.Channel != "card" {
+		return nil
+	}
 	authorization := transaction.Authorization
 	if authorization == nil || !authorization.Reusable || !IsAuthorizationCode(authorization.AuthorizationCode) {
 		return nil
@@ -156,20 +160,29 @@ func (h *WebhookHandler) captureReusableAuthorization(
 		return err
 	}
 	subscriptionID := lo.FromPtr(invoiceResp.SubscriptionID)
-	if subscriptionID == "" {
+	if subscriptionID == "" || invoiceResp.InvoiceType != types.InvoiceTypeSubscription {
 		return nil
+	}
+
+	sub, err := services.SubscriptionService.GetSubscription(ctx, subscriptionID)
+	if err != nil {
+		return err
+	}
+	if sub == nil || sub.Subscription == nil || sub.CustomerID != invoiceResp.CustomerID || sub.BillingCadence != types.BILLING_CADENCE_RECURRING || sub.BillingPeriod == types.BILLING_PERIOD_ONETIME {
+		return ierr.NewError("Paystack card does not belong to a recurring subscription invoice").Mark(ierr.ErrValidation)
 	}
 
 	// Always replace the bounded descriptor set for an accepted authorization. Empty optional
 	// values intentionally clear details from a prior card rather than displaying stale data.
 	metadata := map[string]string{
-		MetadataKeyCustomerEmail: strings.TrimSpace(transaction.Customer.Email),
-		MetadataKeyCardLast4:     authorization.Last4,
-		MetadataKeyCardType:      authorization.CardType,
-		MetadataKeyCardBank:      authorization.Bank,
-		MetadataKeyCardExpMonth:  authorization.ExpMonth,
-		MetadataKeyCardExpYear:   authorization.ExpYear,
-		MetadataKeyCapturedAt:    capturedAt.UTC().Format(time.RFC3339Nano),
+		MetadataKeyCustomerEmail:     strings.TrimSpace(transaction.Customer.Email),
+		MetadataKeyCardLast4:         authorization.Last4,
+		MetadataKeyCardType:          authorization.CardType,
+		MetadataKeyCardBank:          authorization.Bank,
+		MetadataKeyCardExpMonth:      authorization.ExpMonth,
+		MetadataKeyCardExpYear:       authorization.ExpYear,
+		MetadataKeyCapturedAt:        capturedAt.UTC().Format(time.RFC3339Nano),
+		"paystack_save_card_consent": "true",
 	}
 
 	if err := services.SubscriptionService.SaveGatewayPaymentMethod(ctx, subscriptionID, authorization.AuthorizationCode, metadata); err != nil {

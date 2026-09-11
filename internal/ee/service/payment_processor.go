@@ -315,7 +315,8 @@ func (p *paymentProcessor) handlePaystackPaymentLinkCreation(ctx context.Context
 		return ierr.WithError(err).WithHint("Failed to get Paystack integration").Mark(ierr.ErrSystem)
 	}
 	result, err := integration.PaymentSvc.CreatePaymentLink(ctx, &paystack.CreatePaymentLinkRequest{
-		InvoiceID: paymentObj.DestinationID, CustomerID: invoice.CustomerID,
+		SaveCardAndMakeDefault: paymentObj.GatewayMetadata["save_card_and_make_default"] == "true",
+		InvoiceID:              paymentObj.DestinationID, CustomerID: invoice.CustomerID,
 		Amount: paymentObj.Amount, Currency: paymentObj.Currency,
 		SuccessURL: successURL, CancelURL: cancelURL,
 		Metadata: linkMetadata, PaymentID: paymentObj.ID,

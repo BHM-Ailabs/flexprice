@@ -3,6 +3,7 @@ package ent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/flexprice/flexprice/internal/config"
 	domainInvoice "github.com/flexprice/flexprice/internal/domain/invoice"
@@ -69,4 +70,53 @@ func TestInvoiceRepository_Update_PersistsIsManuallyEdited(t *testing.T) {
 	reloaded, err := repo.Get(ctx, inv.ID)
 	require.NoError(t, err)
 	require.True(t, reloaded.IsManuallyEdited, "is_manually_edited should persist true after Update")
+}
+
+func TestInvoiceRepository_ReportingDateIncludesUndatedOneOff(t *testing.T) {
+	client := newRealPostgresTestClient(t)
+	ctx := types.SetEnvironmentID(testInvoiceContext(), "env_reporting_test")
+	require.NoError(t, client.Writer(ctx).Schema.Create(ctx))
+	log, err := logger.NewLogger(&config.Configuration{Logging: config.LoggingConfig{Level: types.LogLevelInfo}})
+	require.NoError(t, err)
+	repo := NewInvoiceRepository(client, log, noopRedisCache{})
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 1, 0)
+	mid := start.AddDate(0, 0, 10)
+	cases := []struct {
+		name                     string
+		kind                     types.InvoiceType
+		period, issue, finalized *time.Time
+		want                     bool
+	}{
+		{"oneoff-issued", types.InvoiceTypeOneOff, nil, &mid, &end, true},
+		{"oneoff-finalized", types.InvoiceTypeOneOff, nil, nil, &mid, true},
+		{"oneoff-created", types.InvoiceTypeOneOff, nil, nil, nil, true},
+		{"dated-subscription", types.InvoiceTypeSubscription, &start, nil, nil, true},
+		{"end-exclusive", types.InvoiceTypeOneOff, nil, &end, &mid, false},
+		{"undated-subscription", types.InvoiceTypeSubscription, nil, &mid, &mid, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := newTestInvoice(ctx)
+			inv.IdempotencyKey = &inv.ID
+			inv.CreatedAt = mid
+			inv.InvoiceType, inv.InvoiceStatus = tc.kind, types.InvoiceStatusFinalized
+			inv.PeriodStart, inv.IssueDate, inv.FinalizedAt = tc.period, tc.issue, tc.finalized
+			require.NoError(t, repo.Create(ctx, inv))
+			filter := types.NewNoLimitInvoiceFilter()
+			filter.InvoiceIDs = []string{inv.ID}
+			filter.ReportingDateGTE, filter.ReportingDateLT = &start, &end
+			rows, err := repo.List(ctx, filter)
+			require.NoError(t, err)
+			if tc.want {
+				require.Len(t, rows, 1)
+			} else {
+				require.Empty(t, rows)
+			}
+			other := types.SetEnvironmentID(ctx, "other-env")
+			rows, err = repo.List(other, filter)
+			require.NoError(t, err)
+			require.Empty(t, rows)
+		})
+	}
 }

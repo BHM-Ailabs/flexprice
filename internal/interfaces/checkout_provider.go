@@ -26,15 +26,16 @@ type CheckoutProvider interface {
 
 // CheckoutProviderRequest is the unified input for all checkout provider adapters.
 type CheckoutProviderRequest struct {
-	InvoiceID  string
-	CustomerID string
-	Amount     decimal.Decimal
-	Currency   string
-	PaymentID  string // FlexPrice payment ID — embedded in provider metadata for idempotency
-	SuccessURL string
-	FailureURL string
-	CancelURL  string
-	Metadata   map[string]string
+	SaveCardAndMakeDefault bool
+	InvoiceID              string
+	CustomerID             string
+	Amount                 decimal.Decimal
+	Currency               string
+	PaymentID              string // FlexPrice payment ID — embedded in provider metadata for idempotency
+	SuccessURL             string
+	FailureURL             string
+	CancelURL              string
+	Metadata               map[string]string
 }
 
 // CheckoutProviderResponse is the unified output from all checkout provider adapters.
