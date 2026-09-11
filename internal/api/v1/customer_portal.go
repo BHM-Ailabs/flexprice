@@ -1,12 +1,13 @@
 package v1
 
 import (
+	"mime"
 	"net/http"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
+	"github.com/flexprice/flexprice/internal/ee/service"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/logger"
-	"github.com/flexprice/flexprice/internal/ee/service"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -223,6 +224,33 @@ func (h *CustomerPortalHandler) GetInvoicePDF(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"presigned_url": url})
+}
+
+// GetInvoicePDFContent returns an owned invoice PDF without requiring S3.
+// @Summary Download customer portal invoice PDF
+// @ID downloadCustomerPortalInvoicePDF
+// @Tags Customer Portal
+// @Produce application/pdf
+// @Param id path string true "Invoice ID"
+// @Success 200 {file} file
+// @Failure 403 {object} ierr.ErrorResponse
+// @Failure 404 {object} ierr.ErrorResponse
+// @Router /customer/portal/invoices/{id}/pdf/content [get]
+// @Security BearerAuth
+func (h *CustomerPortalHandler) GetInvoicePDFContent(c *gin.Context) {
+	invoiceID := c.Param("id")
+	if invoiceID == "" {
+		c.Error(ierr.NewError("invoice_id is required").Mark(ierr.ErrValidation))
+		return
+	}
+	data, err := h.portalService.GetInvoicePDF(c.Request.Context(), invoiceID)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": "invoice-" + invoiceID + ".pdf"}))
+	c.Data(http.StatusOK, "application/pdf", data)
 }
 
 func (h *CustomerPortalHandler) GetPortalConfig(c *gin.Context) {

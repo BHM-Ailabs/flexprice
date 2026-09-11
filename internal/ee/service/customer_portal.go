@@ -33,6 +33,8 @@ type CustomerPortalService interface {
 	GetWallet(ctx context.Context, walletID string) (*dto.WalletBalanceResponse, error)
 	// GetInvoicePDFUrl returns a presigned URL for an invoice PDF
 	GetInvoicePDFUrl(ctx context.Context, invoiceID string) (string, error)
+	// GetInvoicePDF returns a freshly rendered PDF without requiring object storage.
+	GetInvoicePDF(ctx context.Context, invoiceID string) ([]byte, error)
 	// GetWalletTransactions returns wallet transactions for the portal customer
 	GetWalletTransactions(ctx context.Context, walletID string, filter *types.WalletTransactionFilter) (*dto.ListWalletTransactionsResponse, error)
 	// GetAnalytics returns usage analytics for the portal customer
@@ -357,32 +359,41 @@ func (s *customerPortalService) GetUsageSummary(ctx context.Context, req dto.Get
 }
 
 // GetInvoicePDFUrl returns a presigned URL for an invoice PDF
-func (s *customerPortalService) GetInvoicePDFUrl(ctx context.Context, invoiceID string) (string, error) {
+func (s *customerPortalService) authorizeInvoicePDF(ctx context.Context, invoiceID string) error {
 	customerID := types.GetCustomerID(ctx)
 	if customerID == "" {
-		return "", ierr.NewError("customer not found in context").Mark(ierr.ErrPermissionDenied)
+		return ierr.NewError("customer not found in context").Mark(ierr.ErrPermissionDenied)
 	}
 
-	invoiceService := NewInvoiceService(s.ServiceParams)
-
-	// Get the invoice to verify ownership
-	req := dto.GetInvoiceWithBreakdownRequest{
-		ID: invoiceID,
-	}
-	invoice, err := invoiceService.GetInvoiceWithBreakdown(ctx, req)
+	// The repository read is tenant/environment scoped. Check the returned scope
+	// and customer again before any render or storage lookup.
+	invoice, err := s.InvoiceRepo.Get(ctx, invoiceID)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	// Verify it belongs to this customer
-	if invoice.CustomerID != customerID {
-		return "", ierr.NewError("invoice not found").
+	if invoice.CustomerID != customerID || invoice.TenantID != types.GetTenantID(ctx) || invoice.EnvironmentID != types.GetEnvironmentID(ctx) {
+		return ierr.NewError("invoice not found").
 			WithHint("Invoice does not belong to this customer").
 			Mark(ierr.ErrNotFound)
 	}
+	return nil
+}
 
-	// Get the presigned URL
-	return invoiceService.GetInvoicePDFUrl(ctx, invoiceID, false)
+// GetInvoicePDFUrl preserves presigned downloads when object storage is configured.
+func (s *customerPortalService) GetInvoicePDFUrl(ctx context.Context, invoiceID string) (string, error) {
+	if err := s.authorizeInvoicePDF(ctx, invoiceID); err != nil {
+		return "", err
+	}
+	return NewInvoiceService(s.ServiceParams).GetInvoicePDFUrl(ctx, invoiceID, false)
+}
+
+// GetInvoicePDF uses the same ownership gate for storage-independent downloads.
+func (s *customerPortalService) GetInvoicePDF(ctx context.Context, invoiceID string) ([]byte, error) {
+	if err := s.authorizeInvoicePDF(ctx, invoiceID); err != nil {
+		return nil, err
+	}
+	return NewInvoiceService(s.ServiceParams).GetInvoicePDF(ctx, invoiceID)
 }
 
 // GetPortalConfig returns the customer_portal_config setting for the current tenant/environment.
