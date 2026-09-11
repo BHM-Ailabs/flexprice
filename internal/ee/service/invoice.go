@@ -2723,7 +2723,9 @@ func (s *invoiceService) GetInvoicePDFUrl(ctx context.Context, id string, forceG
 		return "", err
 	}
 
-	if inv.InvoicePDFURL != nil {
+	// Plaqad downloads use the current branded document. Keep any historical
+	// external PDF URL and cached object intact for audit evidence.
+	if inv.InvoicePDFURL != nil && !s.isPlaqadInvoiceTenant(inv.TenantID) {
 		return lo.FromPtr(inv.InvoicePDFURL), nil
 	}
 
@@ -2734,6 +2736,9 @@ func (s *invoiceService) GetInvoicePDFUrl(ctx context.Context, id string, forceG
 	}
 
 	key := fmt.Sprintf("%s/%s", inv.TenantID, id)
+	if s.isPlaqadInvoiceTenant(inv.TenantID) {
+		key = plaqadInvoicePDFCacheKey(inv)
+	}
 
 	if !forceGenerate {
 		// Check if the file already exists in S3 and return a presigned URL without regenerating
@@ -2857,6 +2862,12 @@ func (s *invoiceService) getInvoiceDataForPDFGen(
 		AmountRemaining:            amountRemaining,
 		PaymentStatus:              string(inv.PaymentStatus),
 		InvoiceType:                string(inv.InvoiceType),
+	}
+	if s.isPlaqadInvoiceTenant(inv.TenantID) {
+		data.PlaqadBranding = true
+		data.Biller.Name = "Plaqad"
+		data.Biller.Website = "plaqad.com"
+		data.AccountURL, data.AccountLinkLabel = plaqadInvoiceAccountLink(inv.ID, customer.ExternalID)
 	}
 
 	// Convert dates

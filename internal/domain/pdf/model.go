@@ -12,6 +12,10 @@ type InvoiceData struct {
 	Currency                   string     `json:"currency"`
 	Precision                  int32      `json:"precision"`
 	BannerImage                string     `json:"banner_image,omitempty"`
+	PlaqadBranding             bool       `json:"plaqad_branding,omitempty"`
+	AccountURL                 string     `json:"account_url,omitempty"`
+	AccountLinkLabel           string     `json:"account_link_label,omitempty"`
+	AccountQRSVG               string     `json:"account_qr_svg,omitempty"`
 	ID                         string     `json:"id"`
 	InvoiceStatus              string     `json:"invoice_status"`
 	InvoiceNumber              string     `json:"invoice_number"`

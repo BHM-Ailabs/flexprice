@@ -111,6 +111,9 @@
   amount-remaining: 0,          // Amount remaining to be paid
   payment-status: "",           // Payment status (pending, succeeded, etc.)
   invoice-type: "",             // Invoice type (subscription, one_time, etc.)
+  account-url: "",
+  account-link-label: "",
+  account-qr: none,
   doc,
 ) = {
   // Go nil slices marshal as JSON null; .at(..., default: ()) only applies when the key is missing.
@@ -185,7 +188,7 @@
         #banner-image
       ],
       [
-        #text(weight: "medium", size: 1.6em)[Invoice]
+        #text(weight: "medium", size: 1.6em, fill: styling.primary-color)[Invoice]
       ]
     )
     v(0.8em)
@@ -203,7 +206,7 @@
     #text(weight: "medium", size: 10pt)[Service period:] #text(weight: "regular", size: 10pt, fill: rgb("#666666"))[#service-period-value]
   ]
 
-  line(length: 100%, stroke: 0.5pt + styling.line-color)
+  line(length: 100%, stroke: 1pt + styling.primary-color)
 
   v(1.2em)
 
@@ -491,12 +494,35 @@
     text(weight: "medium", size: 1.1em)[Payment Information]
     v(0.8em)
 
-    [We kindly request that you complete the payment by the due date of #due-date. Your prompt attention to this matter is greatly appreciated.]
+    if payment-status in ("SUCCEEDED", "OVERPAID") and amount-remaining <= 0 {
+      [Payment received. No outstanding balance.]
+    } else if amount-remaining > 0 {
+      [Outstanding balance: #currency#format-currency(amount-remaining, precision: precision).]
+      if due-date != none and due-date != "" {
+        [ Payment is due by #due-date.]
+      }
+    } else {
+      [No outstanding balance.]
+    }
 
-    if "payment-instructions" in biller {
+    if amount-remaining > 0 and biller.at("payment-instructions", default: "") != "" {
       v(0.5em)
       biller.payment-instructions
     }
+  }
+
+  if account-url != "" and account-qr != none {
+    v(1.5em)
+    block(breakable: false)[
+      #grid(
+        columns: (32mm, 1fr),
+        column-gutter: 3mm,
+        align: horizon,
+        account-qr,
+        [#text(weight: "medium", fill: styling.primary-color)[#link(account-url)[#account-link-label]] \
+          #text(size: 8pt, fill: styling.secondary-color)[Sign in to view the available invoice documents and status.]],
+      )
+    ]
   }
 
   // Notes and Description
@@ -523,9 +549,9 @@
   // Footer
   v(3em)
   align(bottom,   align(center, text(size: 8pt)[
-    #biller.name ⋅ 
-    #{if "website" in biller {[#link("https://" + biller.website)[#biller.website] ⋅ ]}}
-    #{if "help-email" in biller {[#link(biller.help-email)[#biller.help-email]]}}
+    #biller.name
+    #{if biller.at("website", default: "") != "" {[ ⋅ #link("https://" + biller.website)[#biller.website]]}}
+    #{if biller.at("help-email", default: "") != "" {[ ⋅ #link("mailto:" + biller.help-email)[#biller.help-email]]}}
   ]))
 
   doc

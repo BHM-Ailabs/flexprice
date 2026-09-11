@@ -1,6 +1,7 @@
 #import "default.typ" as template
 
 #let invoice-data = json(sys.inputs.path)
+#let plaqad = invoice-data.at("plaqad_branding", default: false)
 
 // JSON null (e.g. Go nil slice) is Typst none; .at(key, default: ()) does not substitute when the key exists.
 #let json-array(data, key) = {
@@ -11,7 +12,9 @@
 #show: template.default-invoice.with(
   currency: invoice-data.at("currency", default: "$"),
   precision: invoice-data.at("precision", default: 2),
-  banner-image: if "banner_image" in invoice-data {
+  banner-image: if plaqad {
+    image("plaqad-logo.png", width: 38mm)
+  } else if "banner_image" in invoice-data {
     image(invoice-data.banner_image, width: 30%)
   },
   invoice-status: invoice-data.at("invoice_status", default: "DRAFT"),
@@ -30,10 +33,16 @@
   amount-remaining: invoice-data.at("amount_remaining", default: 0),
   payment-status: invoice-data.at("payment_status", default: ""),
   invoice-type: invoice-data.at("invoice_type", default: ""),
+  account-url: invoice-data.at("account_url", default: ""),
+  account-link-label: invoice-data.at("account_link_label", default: ""),
+  account-qr: if invoice-data.at("account_qr_svg", default: "") != "" {
+    image(bytes(invoice-data.account_qr_svg), format: "svg", width: 30mm)
+  },
   biller: (
     name: invoice-data.at("biller", default: (:)).at("name", default: ""),
     email: invoice-data.at("biller", default: (:)).at("email", default: ""),
     help-email: invoice-data.at("biller", default: (:)).at("help_email", default: ""),
+    website: invoice-data.at("biller", default: (:)).at("website", default: ""),
     address: (
       street: invoice-data.at("biller", default: (:)).at("address", default: (:)).at("street", default: ""),
       city: invoice-data.at("biller", default: (:)).at("address", default: (:)).at("city", default: ""),
@@ -58,7 +67,10 @@
   applied-taxes: json-array(invoice-data, "applied_taxes"),
   applied-discounts: json-array(invoice-data, "applied_discounts"),
   styling: (
-    font: if "styling" in invoice-data and "font" in invoice-data.styling {
+    primary-color: if plaqad { rgb("#209DD8") } else { black },
+    font: if plaqad {
+      "Google Sans 18pt"
+    } else if "styling" in invoice-data and "font" in invoice-data.styling {
       invoice-data.styling.font
     } else {
       "Inter"
