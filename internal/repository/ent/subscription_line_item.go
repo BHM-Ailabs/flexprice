@@ -301,7 +301,7 @@ func (r *subscriptionLineItemRepository) BulkTerminate(ctx context.Context, subs
 	if err != nil {
 		SetSpanError(span, err)
 		if ent.IsNotFound(err) {
-			return 0, ierr.NewError("no subscription line items terminated").
+			return 0, ierr.WithError(err).
 				WithHint("No subscription line items were terminated").
 				Mark(ierr.ErrNotFound)
 		}

@@ -21,8 +21,9 @@ For an error marked `ErrDatabase`, `ResolveError` applies this policy:
   not prove temporary unavailability. Unknown database errors also remain **500**.
   Neither case may fall through to a contextual 404 or 400.
 - Domain markers may produce 404/400/409/403 only when the chain contains a
-  deterministic database cause: Ent not-found, validation or constraint errors,
-  `sql.ErrNoRows`, or PostgreSQL class **22**/**23** (data/constraint errors).
+  deterministic cause: Ent not-found, validation or constraint errors,
+  `sql.ErrNoRows`, PostgreSQL class **22**/**23** (data/constraint errors), or
+  the private query-validation cause emitted by pure DSL field resolution.
   Deterministic causes without a domain marker retain the database-error 500.
   Ordinary domain errors without an `ErrDatabase` marker keep their existing
   status. Genuine API-key denials remain **401**.
@@ -32,6 +33,18 @@ The generated Ent package imports `internal/types`, which imports
 `internal/errors` checks concrete package/type identity while walking the error
 chain. Tests in the external `errors_test` package exercise the real generated
 Ent types. No message matching or generated-code edits are involved.
+
+DSL filter/sort field resolvers consult local column definitions before SQL.
+Their validation errors retain a distinct private cause through repository and
+service wrappers. `WithQueryValidation` is restricted to this pure construction
+boundary: it refuses database-marked errors, infrastructure failures and errors
+without a validation marker. Ordinary contextual validation/not-found markers
+still cannot override an unknown database failure. Infrastructure precedence
+remains first even when an error chain contains query-validation evidence.
+
+Repository translations of proven missing rows must preserve the Ent absence
+cause, or `sql.ErrNoRows` for a successful zero-row update/delete. Replacing that
+cause with a new domain-only message loses the proof needed by outer wrappers.
 
 Services must check `ierr.IsNotFound` before translating a repository error to
 `ErrNotFound`, especially when constructing a replacement error that would lose

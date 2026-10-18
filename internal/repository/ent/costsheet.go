@@ -5,6 +5,7 @@ package ent
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/flexprice/flexprice/ent"
@@ -84,7 +85,7 @@ func (r *costsheetRepository) GetByID(ctx context.Context, id string) (*domainCo
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ierr.NewError("costsheet not found").
+			return nil, ierr.WithError(err).
 				WithHint("No costsheet found with the provided ID").
 				WithReportableDetails(map[string]any{"id": id}).
 				Mark(ierr.ErrNotFound)
@@ -303,7 +304,7 @@ func (r *costsheetRepository) Update(ctx context.Context, cs *domainCostsheet.Co
 
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return ierr.NewError("costsheet not found").
+			return ierr.WithError(err).
 				WithHint("No costsheet found with the provided ID").
 				WithReportableDetails(map[string]any{"id": cs.ID}).
 				Mark(ierr.ErrNotFound)
@@ -315,7 +316,7 @@ func (r *costsheetRepository) Update(ctx context.Context, cs *domainCostsheet.Co
 	}
 
 	if affected == 0 {
-		return ierr.NewError("costsheet not found").
+		return ierr.WithError(sql.ErrNoRows).
 			WithHint("No costsheet found with the provided ID").
 			WithReportableDetails(map[string]any{"id": cs.ID}).
 			Mark(ierr.ErrNotFound)
@@ -345,7 +346,7 @@ func (r *costsheetRepository) Delete(ctx context.Context, id string) error {
 
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return ierr.NewError("costsheet not found").
+			return ierr.WithError(err).
 				WithHint("No costsheet found with the provided ID").
 				WithReportableDetails(map[string]any{"id": id}).
 				Mark(ierr.ErrNotFound)
@@ -376,7 +377,7 @@ func (r *costsheetRepository) Delete(ctx context.Context, id string) error {
 				Mark(ierr.ErrDatabase)
 		}
 		if !exists {
-			return ierr.NewError("costsheet not found").
+			return ierr.WithError(sql.ErrNoRows).
 				WithHint("No costsheet found with the provided ID").
 				WithReportableDetails(map[string]any{"id": id}).
 				Mark(ierr.ErrNotFound)
@@ -405,7 +406,7 @@ func (r *costsheetRepository) GetByName(ctx context.Context, tenantID, environme
 
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ierr.NewError("costsheet not found").
+			return nil, ierr.WithError(err).
 				WithHint("No costsheet found with the provided name").
 				WithReportableDetails(map[string]any{
 					"name":           name,
@@ -437,7 +438,7 @@ func (r *costsheetRepository) GetByLookupKey(ctx context.Context, tenantID, envi
 
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ierr.NewError("costsheet not found").
+			return nil, ierr.WithError(err).
 				WithHint("No costsheet found with the provided lookup key").
 				WithReportableDetails(map[string]any{
 					"lookup_key":     lookupKey,

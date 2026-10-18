@@ -2,6 +2,7 @@ package ent
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/flexprice/flexprice/ent"
 	"github.com/flexprice/flexprice/ent/scheduledtask"
@@ -77,7 +78,7 @@ func (r *ScheduledTaskRepository) Get(ctx context.Context, id string) (*domainst
 
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ierr.NewError("scheduled task not found").
+			return nil, ierr.WithError(err).
 				WithHint("Scheduled task with given ID not found").
 				Mark(ierr.ErrNotFound)
 		}
@@ -136,7 +137,7 @@ func (r *ScheduledTaskRepository) Update(ctx context.Context, task *domainst.Sch
 	}
 
 	if count == 0 {
-		return ierr.NewError("scheduled task not found").
+		return ierr.WithError(sql.ErrNoRows).
 			WithHint("No rows matched ID + tenant + environment").
 			Mark(ierr.ErrNotFound)
 	}
@@ -163,7 +164,7 @@ func (r *ScheduledTaskRepository) Delete(ctx context.Context, id string) error {
 	}
 
 	if affected == 0 {
-		return ierr.NewError("scheduled task not found").
+		return ierr.WithError(sql.ErrNoRows).
 			WithHint("No rows matched ID + tenant + environment").
 			Mark(ierr.ErrNotFound)
 	}

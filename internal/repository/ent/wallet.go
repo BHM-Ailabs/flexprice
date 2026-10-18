@@ -2,6 +2,7 @@ package ent
 
 import (
 	"context"
+	stdsql "database/sql"
 	"fmt"
 	"time"
 
@@ -224,7 +225,7 @@ func (r *walletRepository) UpdateWalletStatus(ctx context.Context, id string, st
 		notFoundErr := fmt.Errorf("wallet not found or already updated")
 		SetSpanError(span, notFoundErr)
 
-		return ierr.NewError("wallet not found or already updated").
+		return ierr.WithError(stdsql.ErrNoRows).
 			WithHint("The wallet may not exist or has already been updated").
 			WithReportableDetails(map[string]interface{}{
 				"wallet_id": id,
@@ -767,7 +768,7 @@ func (r *walletRepository) UpdateTransactionStatus(ctx context.Context, id strin
 	}
 
 	if count == 0 {
-		return ierr.NewError("transaction not found").
+		return ierr.WithError(stdsql.ErrNoRows).
 			WithHint("The transaction may not exist").
 			WithReportableDetails(map[string]interface{}{
 				"transaction_id": id,
@@ -813,7 +814,7 @@ func (r *walletRepository) UpdateTransaction(ctx context.Context, tx *walletdoma
 	}
 
 	if count == 0 {
-		return ierr.NewError("transaction not found").
+		return ierr.WithError(stdsql.ErrNoRows).
 			WithHint("The transaction may not exist").
 			WithReportableDetails(map[string]interface{}{
 				"transaction_id": tx.ID,
@@ -1013,7 +1014,7 @@ func (r *walletRepository) UpdateWallet(ctx context.Context, id string, w *walle
 	}
 
 	if count == 0 {
-		return ierr.NewError("wallet not found or already updated").
+		return ierr.WithError(stdsql.ErrNoRows).
 			WithHint("The wallet may not exist or has already been updated").
 			Mark(ierr.ErrNotFound)
 	}

@@ -170,7 +170,7 @@ func (r *subscriptionPhaseRepository) Get(ctx context.Context, id string) (*subs
 	if err != nil {
 		SetSpanError(span, err)
 		if ent.IsNotFound(err) {
-			return nil, ierr.NewError("subscription phase not found").
+			return nil, ierr.WithError(err).
 				WithHint("The subscription phase with the given ID does not exist").
 				WithReportableDetails(map[string]interface{}{
 					"phase_id": id,
@@ -215,7 +215,7 @@ func (r *subscriptionPhaseRepository) Update(ctx context.Context, phase *subscri
 	if err != nil {
 		SetSpanError(span, err)
 		if ent.IsNotFound(err) {
-			return ierr.NewError("subscription phase not found").
+			return ierr.WithError(err).
 				WithHint("The subscription phase with the given ID does not exist").
 				WithReportableDetails(map[string]interface{}{
 					"phase_id": phase.ID,
@@ -259,7 +259,7 @@ func (r *subscriptionPhaseRepository) Delete(ctx context.Context, id string) err
 	if err != nil {
 		SetSpanError(span, err)
 		if ent.IsNotFound(err) {
-			return ierr.NewError("subscription phase not found").
+			return ierr.WithError(err).
 				WithHint("The subscription phase with the given ID does not exist").
 				WithReportableDetails(map[string]interface{}{
 					"phase_id": id,

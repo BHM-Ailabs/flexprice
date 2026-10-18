@@ -84,7 +84,11 @@ func infrastructureReason(err error) string {
 	return ""
 }
 
-func hasDeterministicDatabaseCause(err error) bool {
+func hasDeterministicDomainCause(err error) bool {
+	var queryValidation *queryValidationError
+	if errors.As(err, &queryValidation) {
+		return true
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return true
 	}
@@ -108,7 +112,7 @@ func hasDeterministicDatabaseCause(err error) bool {
 		}
 		if joined, ok := err.(interface{ Unwrap() []error }); ok {
 			for _, cause := range joined.Unwrap() {
-				if hasDeterministicDatabaseCause(cause) {
+				if hasDeterministicDomainCause(cause) {
 					return true
 				}
 			}

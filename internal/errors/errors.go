@@ -192,9 +192,9 @@ func ResolveError(err error) (httpStatus int, code ErrorCode) {
 			return http.StatusServiceUnavailable, ErrCodeDatabase
 		}
 		// Services sometimes add not-found/validation markers to every repo
-		// error. Trust those markers only with a deterministic database cause;
+		// error. Trust those markers only with a deterministic domain cause;
 		// an unknown database failure must never imply an absent subscription.
-		if !hasDeterministicDatabaseCause(err) {
+		if !hasDeterministicDomainCause(err) {
 			return http.StatusInternalServerError, ErrCodeDatabase
 		}
 	}

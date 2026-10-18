@@ -412,7 +412,7 @@ func (r *creditGrantApplicationRepository) FindByIdempotencyKey(ctx context.Cont
 
 		if ent.IsNotFound(err) {
 			r.log.Debug(ctx, "credit grant application not found by idempotency key", "idempotency_key", idempotencyKey)
-			return nil, ierr.NewErrorf("credit grant application not found by idempotency key %s", idempotencyKey).
+			return nil, ierr.WithError(err).
 				WithHint("credit grant application not found by idempotency key").
 				WithReportableDetails(map[string]any{
 					"idempotency_key": idempotencyKey,

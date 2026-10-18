@@ -2,6 +2,7 @@ package ent
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -138,7 +139,7 @@ func (r *subscriptionRepository) Get(ctx context.Context, id string) (*domainSub
 		SetSpanError(span, err)
 
 		if ent.IsNotFound(err) {
-			return nil, ierr.NewError("subscription not found").
+			return nil, ierr.WithError(err).
 				WithHint("Subscription not found").
 				Mark(ierr.ErrNotFound)
 		}
@@ -179,7 +180,7 @@ func (r *subscriptionRepository) GetForUpdate(ctx context.Context, id string) (*
 		return nil, ierr.WithError(rowErr).WithHint("subscription lock failed").Mark(ierr.ErrDatabase)
 	}
 	if !hasRow {
-		return nil, ierr.NewError("subscription not found").
+		return nil, ierr.WithError(sql.ErrNoRows).
 			WithHint("Subscription not found").
 			WithReportableDetails(map[string]any{"id": id}).
 			Mark(ierr.ErrNotFound)
@@ -197,7 +198,7 @@ func (r *subscriptionRepository) GetForUpdate(ctx context.Context, id string) (*
 	if err != nil {
 		SetSpanError(span, err)
 		if ent.IsNotFound(err) {
-			return nil, ierr.NewError("subscription not found").
+			return nil, ierr.WithError(err).
 				WithHint("Subscription not found").
 				WithReportableDetails(map[string]any{"id": id}).
 				Mark(ierr.ErrNotFound)
@@ -336,7 +337,7 @@ func (r *subscriptionRepository) UpdatePlan(ctx context.Context, id string, plan
 			Mark(ierr.ErrDatabase)
 	}
 	if affected == 0 {
-		return ierr.NewError("subscription not found").
+		return ierr.WithError(sql.ErrNoRows).
 			WithHint("Subscription not found").
 			WithReportableDetails(map[string]any{"subscription_id": id}).
 			Mark(ierr.ErrNotFound)
@@ -371,7 +372,7 @@ func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 		SetSpanError(span, err)
 
 		if ent.IsNotFound(err) {
-			return ierr.NewError("subscription not found").
+			return ierr.WithError(err).
 				WithHint("Subscription not found").
 				Mark(ierr.ErrNotFound)
 		}
@@ -925,7 +926,7 @@ func (r *subscriptionRepository) GetWithLineItems(ctx context.Context, id string
 	if err != nil {
 		SetSpanError(span, err)
 		if ent.IsNotFound(err) {
-			return nil, nil, ierr.NewError("subscription not found").
+			return nil, nil, ierr.WithError(err).
 				WithHint("Subscription not found").
 				Mark(ierr.ErrNotFound)
 		}
