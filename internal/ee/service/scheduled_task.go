@@ -85,6 +85,9 @@ func (s *scheduledTaskService) CreateScheduledTask(ctx context.Context, req dto.
 	conn, err := s.connectionRepo.Get(ctx, req.ConnectionID)
 	if err != nil {
 		s.logger.Error(ctx, "failed to get connection", "connection_id", req.ConnectionID, "error", err)
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHint("Connection not found").
 			Mark(ierr.ErrNotFound)
@@ -217,6 +220,9 @@ func (s *scheduledTaskService) GetScheduledTask(ctx context.Context, id string) 
 	task, err := s.repo.Get(ctx, id)
 	if err != nil {
 		s.logger.Error(ctx, "failed to get scheduled task", "id", id, "error", err)
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHint("Scheduled task not found").
 			Mark(ierr.ErrNotFound)
@@ -287,6 +293,9 @@ func (s *scheduledTaskService) UpdateScheduledTask(ctx context.Context, id strin
 	task, err := s.repo.Get(ctx, id)
 	if err != nil {
 		s.logger.Error(ctx, "failed to get scheduled task for update", "id", id, "error", err)
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHint("Scheduled task not found").
 			Mark(ierr.ErrNotFound)
@@ -378,6 +387,9 @@ func (s *scheduledTaskService) DeleteScheduledTask(ctx context.Context, id strin
 	task, err := s.repo.Get(ctx, id)
 	if err != nil {
 		s.logger.Error(ctx, "failed to get scheduled task for deletion", "id", id, "error", err)
+		if !ierr.IsNotFound(err) {
+			return err
+		}
 		return ierr.WithError(err).
 			WithHint("Scheduled task not found").
 			Mark(ierr.ErrNotFound)

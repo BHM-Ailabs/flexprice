@@ -881,6 +881,9 @@ func (s *invoiceService) ListInvoices(ctx context.Context, filter *types.Invoice
 	if filter.ExternalCustomerID != "" {
 		customer, err := s.CustomerRepo.GetByLookupKey(ctx, filter.ExternalCustomerID)
 		if err != nil {
+			if !ierr.IsNotFound(err) {
+				return nil, err
+			}
 			return nil, ierr.WithError(err).
 				WithHint("failed to get customer by external customer id").
 				Mark(ierr.ErrNotFound)

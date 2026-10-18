@@ -187,11 +187,19 @@ func ResolveError(err error) (httpStatus int, code ErrorCode) {
 	if IsServiceUnavailable(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return http.StatusServiceUnavailable, ErrCodeServiceUnavailable
 	}
-	if IsDatabase(err) && IsInfrastructureFailure(err) {
-		return http.StatusServiceUnavailable, ErrCodeDatabase
+	if IsDatabase(err) {
+		if IsInfrastructureFailure(err) {
+			return http.StatusServiceUnavailable, ErrCodeDatabase
+		}
+		// Services sometimes add not-found/validation markers to every repo
+		// error. Trust those markers only with a deterministic database cause;
+		// an unknown database failure must never imply an absent subscription.
+		if !hasDeterministicDatabaseCause(err) {
+			return http.StatusInternalServerError, ErrCodeDatabase
+		}
 	}
-	// Domain markers survive generic database wrappers. Resolve them before
-	// the unordered fallback map so a missing plan never becomes a DB error.
+	// Proven domain failures survive generic database wrappers. Resolve them
+	// before the unordered fallback map so a missing plan retains its 404.
 	for _, sentinel := range []error{ErrNotFound, ErrValidation, ErrInvalidOperation, ErrPermissionDenied, ErrAlreadyExists, ErrVersionConflict} {
 		if errors.Is(err, sentinel) {
 			m := errMappings[sentinel]

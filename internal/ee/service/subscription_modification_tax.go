@@ -128,6 +128,9 @@ func (s *subscriptionModificationService) executeRemoveTax(
 
 	assoc, err := sp.TaxAssociationRepo.Get(ctx, associationID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.NewError("association not found").
 			WithHint("Provide a valid association_id belonging to this subscription").
 			WithReportableDetails(map[string]interface{}{"association_id": associationID}).
@@ -264,6 +267,9 @@ func (s *subscriptionModificationService) previewRemoveTax(
 
 	assoc, err := sp.TaxAssociationRepo.Get(ctx, associationID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.NewError("association not found").
 			WithHint("Provide a valid association_id").
 			WithReportableDetails(map[string]interface{}{"association_id": associationID}).

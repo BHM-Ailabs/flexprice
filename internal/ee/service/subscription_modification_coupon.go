@@ -181,6 +181,9 @@ func (s *subscriptionModificationService) executeRemoveCoupon(
 
 	assoc, err := sp.CouponAssociationRepo.Get(ctx, associationID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.NewError("association not found").
 			WithHint("Provide a valid association_id belonging to this subscription").
 			WithReportableDetails(map[string]interface{}{"association_id": associationID}).
@@ -338,6 +341,9 @@ func (s *subscriptionModificationService) previewRemoveCoupon(
 
 	assoc, err := sp.CouponAssociationRepo.Get(ctx, associationID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.NewError("association not found").
 			WithHint("Provide a valid association_id").
 			WithReportableDetails(map[string]interface{}{"association_id": associationID}).

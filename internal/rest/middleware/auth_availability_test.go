@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/gin-gonic/gin"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -132,8 +134,10 @@ func TestDatabaseDomainResponsesAreNotRetryable(t *testing.T) {
 		err    error
 		status int
 	}{
-		{ierr.WithError(ierr.ErrNotFound).Mark(ierr.ErrDatabase), 404},
-		{ierr.WithError(ierr.ErrValidation).Mark(ierr.ErrDatabase), 400},
+		{ierr.WithError(ierr.WithError(sql.ErrNoRows).Mark(ierr.ErrNotFound)).Mark(ierr.ErrDatabase), 404},
+		{ierr.WithError(ierr.WithError(&pq.Error{Code: "23505"}).Mark(ierr.ErrValidation)).Mark(ierr.ErrDatabase), 400},
+		{ierr.WithError(ierr.ErrNotFound).Mark(ierr.ErrDatabase), 500},
+		{ierr.WithError(ierr.ErrValidation).Mark(ierr.ErrDatabase), 500},
 		{ierr.ErrDatabase, 500},
 	} {
 		r := gin.New()
