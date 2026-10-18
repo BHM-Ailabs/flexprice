@@ -126,6 +126,31 @@ services:
     depends_on:
       - temporal
 
+  # Local provisioning is explicit and completes before worker startup. Never
+  # point this service at an existing production namespace to repair a backlog.
+  temporal-bootstrap:
+    image: temporalio/admin-tools:1.26.2
+    depends_on:
+      temporal:
+        condition: service_started
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_NAMESPACE=default
+    volumes:
+      - ./internal/ee/infrastructure/helm/flexprice/files/bootstrap-temporal-search-attributes.sh:/bootstrap.sh:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        for i in $$(seq 1 60); do
+          if temporal --address "$$TEMPORAL_ADDRESS" --namespace "$$TEMPORAL_NAMESPACE" operator search-attribute list >/dev/null 2>&1; then
+            exec /bin/sh /bootstrap.sh
+          fi
+          sleep 1
+        done
+        echo 'Temporal namespace unavailable after 60s' >&2
+        exit 1
+    restart: "no"
+
   # Build stage as a separate service that other services can depend on
   flexprice-build:
     image: flexprice-app:local
@@ -217,6 +242,8 @@ services:
         condition: service_healthy
       temporal:
         condition: service_started
+      temporal-bootstrap:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:

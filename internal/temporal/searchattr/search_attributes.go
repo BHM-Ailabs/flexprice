@@ -11,6 +11,8 @@ package searchattr
 
 import (
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -23,6 +25,11 @@ const (
 	SearchAttributeSubscriptionID  = "SubscriptionID"
 	SearchAttributeTenantID        = "TenantID"
 	SearchAttributeEnvironmentID   = "EnvironmentID"
+
+	// Temporal 1.26.2 PostgreSQL visibility stores Keyword in VARCHAR(255).
+	// At most 255 runes also fits the 2048-byte JSON payload limit, even when
+	// every rune needs a six-byte JSON escape (255*6 + quotes = 1532).
+	maxKeywordRunes = 255
 )
 
 // UpsertFailureSearchAttributes upserts search attributes when an activity fails
@@ -69,7 +76,7 @@ func UpsertFailureSearchAttributes(
 
 	// Safely add activity name
 	if activityName != "" {
-		searchAttrs[SearchAttributeFailingActivity] = activityName
+		searchAttrs[SearchAttributeFailingActivity] = boundedKeyword(activityName)
 	}
 
 	// Safely add failure reason
@@ -77,12 +84,11 @@ func UpsertFailureSearchAttributes(
 	if err != nil {
 		errMsg = err.Error()
 	}
-	// Temporal has a 2048 byte limit - truncate to 2000 bytes to be safe
-	searchAttrs[SearchAttributeFailureReason] = truncateStringByBytes(errMsg, 2000)
+	searchAttrs[SearchAttributeFailureReason] = boundedKeyword(errMsg)
 
 	// Safely add subscription ID if provided
 	if subscriptionID != "" {
-		searchAttrs[SearchAttributeSubscriptionID] = subscriptionID
+		searchAttrs[SearchAttributeSubscriptionID] = keywordIdentity(subscriptionID)
 	}
 
 	// Upsert the search attributes - if this fails, only log warning
@@ -128,9 +134,29 @@ func UpsertWorkflowSearchAttributes(ctx workflow.Context, attrs map[string]inter
 	}()
 
 	logger := workflow.GetLogger(ctx)
-
+	// Never shorten an identity into a different searchable identity. Invalid
+	// metadata is cleared; the actual workflow input/tenant context is unchanged.
+	// Keep the existing upsert command and keys, including during replay.
+	safeAttrs := make(map[string]interface{}, len(attrs))
+	for name, value := range attrs {
+		switch name {
+		case SearchAttributeSubscriptionID, SearchAttributeTenantID, SearchAttributeEnvironmentID:
+			id, ok := value.(string)
+			if !ok || !validKeywordID(id) {
+				logger.Warn("Cleared invalid Keyword identity metadata", "attribute", name)
+				value = ""
+			}
+		case SearchAttributeFailingActivity, SearchAttributeFailureReason:
+			message, ok := value.(string)
+			if !ok {
+				message = ""
+			}
+			value = boundedKeyword(message)
+		}
+		safeAttrs[name] = value
+	}
 	// Attempt to upsert - if this fails, only log warning
-	if err := workflow.UpsertSearchAttributes(ctx, attrs); err != nil {
+	if err := workflow.UpsertSearchAttributes(ctx, safeAttrs); err != nil {
 		// Don't fail the workflow, just log a warning
 		logger.Warn("Failed to upsert workflow search attributes (non-critical)",
 			"error", err.Error(),
@@ -202,47 +228,27 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
-// truncateStringByBytes truncates a string to the specified byte limit
-// This is important for Temporal search attributes which have byte limits, not character limits
-// FAIL-SAFE: Returns empty string on any error
-func truncateStringByBytes(s string, maxBytes int) string {
-	defer func() {
-		if r := recover(); r != nil {
-			// Silently recover from any panic
-		}
-	}()
-
-	if s == "" || maxBytes <= 0 {
-		return ""
-	}
-
-	// If string is already within limit, return as-is
-	if len(s) <= maxBytes {
+// boundedKeyword preserves complete Unicode characters and removes NUL, which
+// PostgreSQL JSONB cannot store. Full diagnostics remain in activity failures;
+// FailureReason is only a bounded, exact-match preview.
+func boundedKeyword(s string) string {
+	s = strings.ReplaceAll(strings.ToValidUTF8(s, "\uFFFD"), "\x00", "\uFFFD")
+	runes := []rune(s)
+	if len(runes) <= maxKeywordRunes {
 		return s
 	}
+	return string(runes[:maxKeywordRunes-3]) + "..."
+}
 
-	// Truncate by bytes, ensuring we don't cut in the middle of a multi-byte character
-	ellipsis := "..."
-	maxBytes -= len(ellipsis) // Reserve space for ellipsis
+func validKeywordID(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, '\x00') && utf8.RuneCountInString(s) <= maxKeywordRunes
+}
 
-	if maxBytes <= 0 {
+func keywordIdentity(s string) string {
+	if !validKeywordID(s) {
 		return ""
 	}
-
-	// Start from maxBytes and walk backward to find a valid UTF-8 boundary
-	truncated := s
-	for len(truncated) > maxBytes {
-		// Remove last rune to ensure we don't cut in middle of multi-byte char
-		truncated = truncated[:len(truncated)-1]
-	}
-
-	// Trim to the last complete UTF-8 character
-	for len(truncated) > 0 && len(truncated) > maxBytes {
-		// Move back one byte at a time until we're under the limit
-		truncated = truncated[:len(truncated)-1]
-	}
-
-	return truncated + ellipsis
+	return s
 }
 
 // GetSearchAttributeQueries returns example queries for filtering workflows

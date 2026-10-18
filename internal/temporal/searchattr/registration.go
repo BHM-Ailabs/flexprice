@@ -28,8 +28,10 @@ func ValidateRegistration(ctx context.Context, namespace string, lister Attribut
 		return fmt.Errorf("list Temporal search attributes in namespace %q: %w", namespace, err)
 	}
 
-	// All values are strings and the query helpers use exact equality. In
-	// particular, Text would tokenize FailureReason and change those semantics.
+	// Temporal 1.26.2/PostgreSQL SQL visibility: all five are exact-match
+	// Keyword values, bounded to VARCHAR(255) by the write helpers. FailureReason
+	// is a preview, not a 2000-byte diagnostic. Text is a TSVECTOR in this server
+	// schema, not a drop-in unrestricted string field for arbitrary errors.
 	required := []string{
 		SearchAttributeEnvironmentID,
 		SearchAttributeFailingActivity,

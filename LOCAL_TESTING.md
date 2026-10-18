@@ -45,6 +45,13 @@ docker compose up -d postgres kafka clickhouse
 sleep 10   # wait for Kafka to fully initialise
 ```
 
+Temporal is disabled by default in `.env.local`. To test workflows, start
+`docker compose up -d temporal temporal-ui`, run `make init-temporal` once to
+provision the five Keyword attributes, then set `FLEXPRICE_TEMPORAL_ENABLED=true`
+in the local override. `make dev-setup` and the Compose worker dependency do this
+bootstrap automatically. Never use the local provisioning job for a live billing
+backlog; follow [the recovery runbook](docs/temporal-search-attributes.md).
+
 ### 3. Create Kafka topics
 
 Run once (idempotent — safe to repeat):

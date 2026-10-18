@@ -390,6 +390,7 @@ dev-setup:
 	@echo "Setting up FlexPrice development environment..."
 	@echo "Step 1: Starting infrastructure services..."
 	@docker compose up -d postgres kafka clickhouse redis temporal temporal-ui
+	@$(MAKE) init-temporal
 	@echo "Step 2: Building FlexPrice application image..."
 	@make build-image
 	@echo "Step 3: Running database migrations and initializing Kafka..."
@@ -412,6 +413,11 @@ dev-setup:
 	@echo "   - make restart-flexprice  # Restart FlexPrice services"
 	@echo "   - make down              # Stop all services"
 	@echo "   - make clean-start       # Clean everything and start fresh"
+
+# Local Docker namespace provisioning; does not load .env or production access.
+.PHONY: init-temporal
+init-temporal:
+	@docker compose run --rm temporal-bootstrap
 
 .PHONY: apply-migration
 apply-migration:
