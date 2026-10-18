@@ -1,19 +1,13 @@
 package searchattr
 
-// This package provides FAIL-SAFE helper functions for setting Temporal custom search attributes.
+// This package queues custom search attribute commands for workflow visibility.
+// The attributes must be registered in the workflow's namespace before workers
+// start (ValidateRegistration checks this outside workflow execution).
 //
-// PRODUCTION SAFETY GUARANTEES:
-// 1. All functions are wrapped in panic recovery - they will NEVER crash a workflow
-// 2. All errors are logged as warnings, not errors - they will NEVER fail a workflow
-// 3. All inputs are validated with early returns - invalid data is handled gracefully
-// 4. If search attributes are not registered in Temporal, workflows continue normally
-//
-// This means:
-// - If Temporal doesn't have search attributes registered: Workflow runs fine, just logs warnings
-// - If there's a bug in this code: Workflow runs fine, panic is recovered
-// - If Temporal API changes: Workflow runs fine, error is logged
-//
-// The workflow's core business logic is COMPLETELY ISOLATED from search attribute functionality.
+// Panic recovery and warning logs handle local SDK errors only. A successful
+// UpsertSearchAttributes call does not validate server registration: rejection
+// happens when Temporal completes the workflow task and can prevent all commands
+// in that task, including activity scheduling, from being committed.
 
 import (
 	"fmt"
@@ -97,9 +91,9 @@ func UpsertFailureSearchAttributes(
 		logger.Warn("Failed to upsert failure search attributes (non-critical)",
 			"activity", activityName,
 			"upsert_error", upsertErr.Error(),
-			"note", "This does not affect workflow execution")
+			"note", "Local SDK error; server-side validation occurs on workflow-task completion")
 	} else {
-		logger.Debug("Upserted failure search attributes",
+		logger.Debug("Queued failure search attribute command",
 			"activity", activityName,
 			"failure_reason_preview", truncateString(errMsg, 100))
 	}
@@ -108,8 +102,8 @@ func UpsertFailureSearchAttributes(
 // UpsertWorkflowSearchAttributes upserts general workflow search attributes
 // Useful for setting searchable metadata at workflow start
 //
-// FAIL-SAFE: This function will NEVER panic or cause workflow to fail.
-// If search attribute upsert fails, it only logs a warning and continues.
+// Local SDK failures are logged. Server-side command validation still requires
+// the namespace contract to have been validated before worker startup.
 //
 // Example usage:
 //
@@ -141,16 +135,16 @@ func UpsertWorkflowSearchAttributes(ctx workflow.Context, attrs map[string]inter
 		logger.Warn("Failed to upsert workflow search attributes (non-critical)",
 			"error", err.Error(),
 			"attribute_count", len(attrs),
-			"note", "This does not affect workflow execution")
+			"note", "Local SDK error; server-side validation occurs on workflow-task completion")
 	} else {
-		logger.Debug("Upserted workflow search attributes", "count", len(attrs))
+		logger.Debug("Queued workflow search attribute command", "count", len(attrs))
 	}
 }
 
 // ClearFailureSearchAttributes clears failure-related search attributes
 // Useful when retrying after a failure
 //
-// FAIL-SAFE: This function will NEVER panic or cause workflow to fail.
+// Server-side command validation requires registered namespace attributes.
 func ClearFailureSearchAttributes(ctx workflow.Context) {
 	// Fail-safe: Early return if context is invalid
 	if ctx == nil {
@@ -179,7 +173,7 @@ func ClearFailureSearchAttributes(ctx workflow.Context) {
 		// Don't fail the workflow, just log a warning
 		logger.Warn("Failed to clear failure search attributes (non-critical)",
 			"error", err.Error(),
-			"note", "This does not affect workflow execution")
+			"note", "Local SDK error; server-side validation occurs on workflow-task completion")
 	}
 }
 
