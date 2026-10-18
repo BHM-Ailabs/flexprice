@@ -80,6 +80,21 @@ type EntClients struct {
 	Writer    *ent.Client
 	Reader    *ent.Client
 	HasReader bool
+	writerDB  *sql.DB
+	readerDB  *sql.DB
+}
+
+func (c *EntClients) Ping(ctx context.Context) error {
+	if c == nil || c.writerDB == nil {
+		return fmt.Errorf("postgres client unavailable")
+	}
+	if err := c.writerDB.PingContext(ctx); err != nil {
+		return err
+	}
+	if c.HasReader && c.readerDB != nil {
+		return c.readerDB.PingContext(ctx)
+	}
+	return nil
 }
 
 // NewEntClients creates both writer and reader Ent clients.
@@ -123,6 +138,7 @@ func NewEntClients(config *config.Configuration, logger *logger.Logger) (*EntCli
 
 	// Initialize reader client
 	var readerClient *ent.Client
+	var readerDB *sql.DB
 	hasReader := config.Postgres.HasSeparateReader()
 
 	if hasReader {
@@ -130,7 +146,7 @@ func NewEntClients(config *config.Configuration, logger *logger.Logger) (*EntCli
 		readerDSN := config.Postgres.GetReaderDSN()
 
 		// Open reader PostgreSQL connection
-		readerDB, err := sql.Open("postgres", readerDSN)
+		readerDB, err = sql.Open("postgres", readerDSN)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to postgres reader: %w", err)
 		}
@@ -178,6 +194,8 @@ func NewEntClients(config *config.Configuration, logger *logger.Logger) (*EntCli
 		Writer:    writerClient,
 		Reader:    readerClient,
 		HasReader: hasReader,
+		writerDB:  writerDB,
+		readerDB:  readerDB,
 	}, nil
 }
 

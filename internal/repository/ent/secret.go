@@ -150,7 +150,9 @@ func (r *secretRepository) GetAPIKeyByValue(ctx context.Context, value string) (
 		return cachedSecret, nil
 	}
 
-	// Not found in cache, fetch from database
+	// Bound pool acquisition, connection establishment and key lookup together.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	client := r.client.Reader(ctx)
 
 	// Get tenant ID from context, but don't require it for API key verification

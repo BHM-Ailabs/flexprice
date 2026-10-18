@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -59,7 +60,7 @@ var (
 		ErrInvalidOperation:   {http.StatusBadRequest, ErrCodeInvalidOperation},
 		ErrPermissionDenied:   {http.StatusForbidden, ErrCodePermissionDenied},
 		ErrHTTPClient:         {http.StatusInternalServerError, ErrCodeHTTPClient},
-		ErrDatabase:           {http.StatusInternalServerError, ErrCodeDatabase},
+		ErrDatabase:           {http.StatusServiceUnavailable, ErrCodeDatabase},
 		ErrSystem:             {http.StatusInternalServerError, ErrCodeSystemError},
 		ErrInternal:           {http.StatusInternalServerError, ErrCodeInternalError},
 		ErrServiceUnavailable: {http.StatusServiceUnavailable, ErrCodeServiceUnavailable},
@@ -182,6 +183,13 @@ func IsNotImplemented(err error) bool {
 // ResolveError returns both the HTTP status code and machine-readable error
 // code for the given error in a single pass over errMappings.
 func ResolveError(err error) (httpStatus int, code ErrorCode) {
+	// Dependency failures take precedence over any contextual domain marker.
+	if IsServiceUnavailable(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return http.StatusServiceUnavailable, ErrCodeServiceUnavailable
+	}
+	if IsDatabase(err) {
+		return http.StatusServiceUnavailable, ErrCodeDatabase
+	}
 	for sentinel, m := range errMappings {
 		if errors.Is(err, sentinel) {
 			return m.Status, m.Code

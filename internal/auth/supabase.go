@@ -2,7 +2,10 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/flexprice/flexprice/internal/config"
@@ -30,6 +33,10 @@ func NewSupabaseAuth(cfg *config.Configuration) Provider {
 		log.Fatalf("failed to create Supabase client")
 	}
 
+	client.HTTPClient = &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: &authDependencyTransport{base: http.DefaultTransport},
+	}
 	logger, _ := logger.NewLogger(cfg)
 
 	return &supabaseAuth{
@@ -83,8 +90,12 @@ func (s *supabaseAuth) Login(ctx context.Context, req AuthRequest, userAuthInfo 
 		Password: req.Password,
 	})
 	if err != nil {
+		var transportError *url.Error
+		if ierr.IsServiceUnavailable(err) || errors.As(err, &transportError) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, ierr.WithError(err).Mark(ierr.ErrServiceUnavailable)
+		}
 		return nil, ierr.WithError(err).
-			WithHint("Failed to get user").
+			WithHint("Invalid email or password").
 			Mark(ierr.ErrPermissionDenied)
 	}
 	return &AuthResponse{
@@ -286,4 +297,20 @@ func (s *supabaseAuth) GenerateCheckoutToken(extraClaims map[string]interface{})
 			Mark(ierr.ErrSystem)
 	}
 	return signed, nil
+}
+
+// The upstream Supabase client erases HTTP status when decoding auth errors.
+// Preserve outages before it can turn a JSON 5xx response into bad credentials.
+type authDependencyTransport struct{ base http.RoundTripper }
+
+func (t *authDependencyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	response, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests {
+		_ = response.Body.Close()
+		return nil, ierr.ErrServiceUnavailable
+	}
+	return response, nil
 }

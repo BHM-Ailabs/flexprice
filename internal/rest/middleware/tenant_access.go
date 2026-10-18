@@ -2,10 +2,9 @@ package middleware
 
 import (
 	"context"
-	"net/http"
 
-	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/ee/service"
+	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/gin-gonic/gin"
 )
@@ -22,13 +21,12 @@ func TenantStatusMiddleware(tenantService service.TenantService, logger *logger.
 			return
 		}
 
-		status, err := tenantService.GetTenantInternalStatus(c.Request.Context(), tenantID)
+		lookupCtx, cancel := context.WithTimeout(c.Request.Context(), authLookupTimeout)
+		status, err := tenantService.GetTenantInternalStatus(lookupCtx, tenantID)
+		cancel()
 		if err != nil {
 			logger.Error(c.Request.Context(), "tenant status: failed to load tenant", "tenant_id", tenantID, "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"message": "failed to verify tenant access",
-			})
-			c.Abort()
+			abortDependencyUnavailable(c)
 			return
 		}
 

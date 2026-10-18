@@ -110,6 +110,9 @@ func (s *secretService) CreateAPIKey(ctx context.Context, req *dto.CreateAPIKeyR
 	// Fetch user to get roles and type
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, "", err
+		}
 		return nil, "", ierr.WithError(err).
 			WithHint("User not found").
 			WithReportableDetails(map[string]interface{}{
@@ -314,9 +317,17 @@ func (s *secretService) VerifyAPIKey(ctx context.Context, apiKey string) (*secre
 	// Get secret by value
 	secretEntity, err := s.repo.GetAPIKeyByValue(ctx, hashedKey)
 	if err != nil {
-		return nil, ierr.NewError("invalid API key").
-			WithHint("Invalid API key").
-			Mark(ierr.ErrValidation)
+		if ierr.IsNotFound(err) {
+			return nil, ierr.NewError("invalid API key").
+				WithHint("Invalid API key").
+				Mark(ierr.ErrValidation)
+		}
+		return nil, ierr.WithError(err).
+			WithHint("API key verification is temporarily unavailable").
+			Mark(ierr.ErrServiceUnavailable)
+	}
+	if secretEntity == nil {
+		return nil, ierr.NewError("API key lookup returned no result").Mark(ierr.ErrServiceUnavailable)
 	}
 
 	// Check if expired

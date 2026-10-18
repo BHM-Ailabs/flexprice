@@ -1,0 +1,13 @@
+{
+  "name": "plaqad-bsp-monitor",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-18",
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "kv_namespaces": [{ "binding": "STATE", "id": "REPLACE_WITH_OPERATOR_CREATED_KV_ID" }],
+  "vars": {
+    "BSP_READY_URL": "https://flexprice-api-production.up.railway.app/health/ready",
+    "ALERT_FROM": "Plaqad Operations <REPLACE_WITH_VERIFIED_RESEND_SENDER>",
+    "ALERT_TO": "REPLACE_WITH_ON_CALL_EMAIL"
+  },
+  "observability": { "enabled": true }
+}

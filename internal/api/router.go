@@ -131,6 +131,7 @@ func NewRouter(
 	// Health check
 	router.GET("/health", handlers.Health.Health)
 	router.POST("/health", handlers.Health.Health)
+	router.GET("/health/ready", handlers.Health.Ready)
 
 	// Public routes
 	public := router.Group("/", middleware.GuestAuthenticateMiddleware)

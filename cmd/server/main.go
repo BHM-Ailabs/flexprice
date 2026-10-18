@@ -253,6 +253,7 @@ func main() {
 			service.NewPaymentProcessorService,
 			service.NewTaskService,
 			service.NewSecretService,
+			service.NewHealthService,
 			service.NewOnboardingService,
 			service.NewGeminiPricingService,
 			service.NewOpenRouterService,
@@ -313,6 +314,7 @@ func main() {
 }
 
 func provideHandlers(
+	healthService service.HealthService,
 	cfg *config.Configuration,
 	logger *logger.Logger,
 	redisCache cache.RedisCache,
@@ -382,7 +384,7 @@ func provideHandlers(
 		Auth:                     v1.NewAuthHandler(cfg, authService, logger),
 		User:                     v1.NewUserHandler(userService, logger),
 		Environment:              v1.NewEnvironmentHandler(environmentService, logger),
-		Health:                   v1.NewHealthHandler(logger),
+		Health:                   v1.NewHealthHandler(logger, healthService),
 		Price:                    v1.NewPriceHandler(priceService, logger),
 		PriceUnit:                v1.NewPriceUnitHandler(priceUnitService, logger),
 		Customer:                 v1.NewCustomerHandler(customerService, billingService, entityIntegrationMappingService, logger),

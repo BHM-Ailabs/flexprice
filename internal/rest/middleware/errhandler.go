@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 
 	"github.com/cockroachdb/errors"
@@ -27,6 +28,11 @@ func ErrorHandler() gin.HandlerFunc {
 				Details:        getSafeDetails(err),
 			}
 
+			if status == http.StatusServiceUnavailable {
+				c.Header("Retry-After", "5")
+				response.Message = "Service temporarily unavailable"
+				response.Details = nil
+			}
 			c.JSON(status, response)
 		}
 	}
