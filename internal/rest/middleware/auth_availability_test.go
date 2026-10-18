@@ -93,7 +93,7 @@ func TestAPIKeyLookupDeadline(t *testing.T) {
 }
 
 func TestDependencyErrorsFromHandlers(t *testing.T) {
-	for _, err := range []error{ierr.ErrDatabase, context.DeadlineExceeded, ierr.ErrServiceUnavailable} {
+	for _, err := range []error{ierr.WithError(context.DeadlineExceeded).Mark(ierr.ErrDatabase), context.DeadlineExceeded, ierr.ErrServiceUnavailable} {
 		r := gin.New()
 		r.Use(ErrorHandler())
 		r.GET("/test", func(c *gin.Context) { _ = c.Error(err) })
@@ -125,4 +125,23 @@ func TestJWTUserLookupUnavailable(t *testing.T) {
 	r.ServeHTTP(w, req)
 	require.Equal(t, 503, w.Code)
 	require.Equal(t, "5", w.Header().Get("Retry-After"))
+}
+
+func TestDatabaseDomainResponsesAreNotRetryable(t *testing.T) {
+	for _, tt := range []struct {
+		err    error
+		status int
+	}{
+		{ierr.WithError(ierr.ErrNotFound).Mark(ierr.ErrDatabase), 404},
+		{ierr.WithError(ierr.ErrValidation).Mark(ierr.ErrDatabase), 400},
+		{ierr.ErrDatabase, 500},
+	} {
+		r := gin.New()
+		r.Use(ErrorHandler())
+		r.GET("/test", func(c *gin.Context) { _ = c.Error(tt.err) })
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/test", nil))
+		require.Equal(t, tt.status, w.Code)
+		require.Empty(t, w.Header().Get("Retry-After"))
+	}
 }

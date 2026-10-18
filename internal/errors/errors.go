@@ -60,7 +60,7 @@ var (
 		ErrInvalidOperation:   {http.StatusBadRequest, ErrCodeInvalidOperation},
 		ErrPermissionDenied:   {http.StatusForbidden, ErrCodePermissionDenied},
 		ErrHTTPClient:         {http.StatusInternalServerError, ErrCodeHTTPClient},
-		ErrDatabase:           {http.StatusServiceUnavailable, ErrCodeDatabase},
+		ErrDatabase:           {http.StatusInternalServerError, ErrCodeDatabase},
 		ErrSystem:             {http.StatusInternalServerError, ErrCodeSystemError},
 		ErrInternal:           {http.StatusInternalServerError, ErrCodeInternalError},
 		ErrServiceUnavailable: {http.StatusServiceUnavailable, ErrCodeServiceUnavailable},
@@ -183,12 +183,20 @@ func IsNotImplemented(err error) bool {
 // ResolveError returns both the HTTP status code and machine-readable error
 // code for the given error in a single pass over errMappings.
 func ResolveError(err error) (httpStatus int, code ErrorCode) {
-	// Dependency failures take precedence over any contextual domain marker.
+	// Only proven dependency failures override contextual domain markers.
 	if IsServiceUnavailable(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return http.StatusServiceUnavailable, ErrCodeServiceUnavailable
 	}
-	if IsDatabase(err) {
+	if IsDatabase(err) && IsInfrastructureFailure(err) {
 		return http.StatusServiceUnavailable, ErrCodeDatabase
+	}
+	// Domain markers survive generic database wrappers. Resolve them before
+	// the unordered fallback map so a missing plan never becomes a DB error.
+	for _, sentinel := range []error{ErrNotFound, ErrValidation, ErrInvalidOperation, ErrPermissionDenied, ErrAlreadyExists, ErrVersionConflict} {
+		if errors.Is(err, sentinel) {
+			m := errMappings[sentinel]
+			return m.Status, m.Code
+		}
 	}
 	for sentinel, m := range errMappings {
 		if errors.Is(err, sentinel) {

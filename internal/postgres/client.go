@@ -10,6 +10,7 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/flexprice/flexprice/ent"
 	"github.com/flexprice/flexprice/internal/config"
+	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/tracing"
 	"github.com/flexprice/flexprice/internal/types"
@@ -248,7 +249,7 @@ func (c *Client) withTx(ctx context.Context, fn func(ctx context.Context) error)
 	// Start a new transaction on the WRITER client
 	tx, err := c.writerClient.Tx(ctx)
 	if err != nil {
-		return fmt.Errorf("starting transaction: %w", err)
+		return ierr.WithError(err).WithMessage("starting transaction").Mark(ierr.ErrDatabase)
 	}
 
 	// Ensure transaction is rolled back on panic

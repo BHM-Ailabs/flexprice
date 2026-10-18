@@ -232,7 +232,7 @@ func APIKeyAuthMiddleware(cfg *config.Configuration, secretService service.Secre
 		apiKey := c.GetHeader(cfg.Auth.APIKey.Header)
 		tenantID, userID, environmentID, userType, roles, valid, err := validateAPIKey(c.Request.Context(), cfg, secretService, apiKey)
 		if err != nil {
-			logger.Error(c.Request.Context(), "API key verification unavailable", "error", "dependency lookup failed")
+			logger.Error(c.Request.Context(), "API key verification unavailable", "error", ierr.SanitizedDependencyError(err))
 			abortDependencyUnavailable(c)
 			return
 		}
@@ -262,7 +262,7 @@ func AuthenticateMiddleware(cfg *config.Configuration, secretService service.Sec
 		apiKey := c.GetHeader(cfg.Auth.APIKey.Header)
 		tenantID, userID, environmentID, userType, roles, valid, err := validateAPIKey(c.Request.Context(), cfg, secretService, apiKey)
 		if err != nil {
-			logger.Error(c.Request.Context(), "API key verification unavailable", "error", "dependency lookup failed")
+			logger.Error(c.Request.Context(), "API key verification unavailable", "error", ierr.SanitizedDependencyError(err))
 			abortDependencyUnavailable(c)
 			return
 		}

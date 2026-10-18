@@ -2,6 +2,16 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	"errors"
+	"fmt"
+	ierr "github.com/flexprice/flexprice/internal/errors"
+	"github.com/lib/pq"
+	"github.com/stretchr/testify/require"
+	"syscall"
 	"testing"
 
 	"github.com/flexprice/flexprice/ent"
@@ -87,5 +97,46 @@ func TestReader_UnpinnedContextWithoutHolderStaysOnReplica(t *testing.T) {
 
 	if got := c.Reader(ctx); got != reader {
 		t.Fatal("expected context without pin holder to keep reading from replica")
+	}
+}
+
+// Exercise Ent's real transaction-begin path with an in-process SQL driver;
+// no database, credentials, or financial writes are involved.
+type failingBeginDriver struct{ err error }
+type failingBeginConn struct{ err error }
+
+func (d failingBeginDriver) Open(string) (driver.Conn, error)  { return failingBeginConn{d.err}, nil }
+func (c failingBeginConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("unused") }
+func (c failingBeginConn) Close() error                        { return nil }
+func (c failingBeginConn) Begin() (driver.Tx, error)           { return nil, c.err }
+func (c failingBeginConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return nil, c.err
+}
+
+func TestTransactionBeginAvailability(t *testing.T) {
+	for i, tt := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"refused", syscall.ECONNREFUSED, 503},
+		{"reset", syscall.ECONNRESET, 503},
+		{"timeout", context.DeadlineExceeded, 503},
+		{"pool exhausted", &pq.Error{Code: "53300"}, 503},
+		{"recovering", &pq.Error{Code: "57P03"}, 503},
+		{"deterministic", &pq.Error{Code: "25001"}, 500},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			name := fmt.Sprintf("round2-begin-%d", i)
+			sql.Register(name, failingBeginDriver{tt.err})
+			db, err := sql.Open(name, "")
+			require.NoError(t, err)
+			defer db.Close()
+			client := &Client{writerClient: ent.NewClient(ent.Driver(entsql.OpenDB(dialect.Postgres, db)))}
+			err = client.withTx(context.Background(), func(context.Context) error { t.Fatal("callback ran after failed begin"); return nil })
+			require.ErrorIs(t, err, tt.err)
+			status, _ := ierr.ResolveError(err)
+			require.Equal(t, tt.status, status)
+		})
 	}
 }
