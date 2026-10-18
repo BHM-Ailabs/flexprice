@@ -38,6 +38,11 @@ func CheckReadiness(ctx context.Context, cfg *config.KafkaConfig) error {
 			for _, topic := range response.Topics {
 				if topic.Name == cfg.Topic {
 					healthy = topic.Err == sarama.ErrNoError && len(topic.Partitions) > 0
+					for _, partition := range topic.Partitions {
+						if partition.Err != sarama.ErrNoError || partition.Leader < 0 {
+							healthy = false
+						}
+					}
 				}
 			}
 			if healthy {

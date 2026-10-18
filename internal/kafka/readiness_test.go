@@ -44,3 +44,12 @@ func TestKafkaReadinessCanceled(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, CheckReadiness(ctx, &config.KafkaConfig{Brokers: []string{"127.0.0.1:1"}}), context.Canceled)
 }
+
+func TestKafkaReadinessNoLeader(t *testing.T) {
+	broker := sarama.NewMockBroker(t, 1)
+	defer broker.Close()
+	broker.SetHandlerByMap(map[string]sarama.MockResponse{
+		"MetadataRequest": sarama.NewMockMetadataResponse(t).SetBroker(broker.Addr(), 1).SetLeader("events", 0, -1),
+	})
+	require.Error(t, CheckReadiness(context.Background(), &config.KafkaConfig{Brokers: []string{broker.Addr()}, Topic: "events", ClientID: "readiness-test"}))
+}
