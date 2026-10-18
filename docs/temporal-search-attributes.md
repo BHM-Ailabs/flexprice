@@ -76,6 +76,9 @@ temporal --address "$TEMPORAL_ADDRESS" operator cluster describe --detail
 temporal --address "$TEMPORAL_ADDRESS" --namespace "$TEMPORAL_NAMESPACE" operator namespace describe
 temporal --address "$TEMPORAL_ADDRESS" --namespace "$TEMPORAL_NAMESPACE" operator search-attribute list --output json > attributes-before.json
 temporal --address "$TEMPORAL_ADDRESS" --namespace "$TEMPORAL_NAMESPACE" schedule list --output json > schedules-before.json
+temporal --address "$TEMPORAL_ADDRESS" --namespace "$TEMPORAL_NAMESPACE" workflow count --query "WorkflowType IN ('ProcessSubscriptionBillingWorkflow', 'DraftAndComputeSubscriptionInvoiceWorkflow') GROUP BY ExecutionStatus"
+temporal --address "$TEMPORAL_ADDRESS" --namespace "$TEMPORAL_NAMESPACE" workflow list --query "ExecutionStatus = 'Running' AND WorkflowType IN ('ScheduleSubscriptionBillingWorkflow', 'DailyDraftAndComputeWorkflow')" --limit 0 --output json > producers-open.json
+temporal --address "$TEMPORAL_ADDRESS" --namespace "$TEMPORAL_NAMESPACE" workflow list --query "ExecutionStatus = 'Running' AND WorkflowType = 'ProcessInvoiceWorkflow'" --limit 0 --output json > invoices-open.json
 ```
 
 Expected namespace ID: `93a0f1c6-ea99-4876-814a-c528dbc33d1d`; server 1.26.2 and
@@ -89,6 +92,11 @@ infer their existence from names alone. Inventory open producer executions and
 `ProcessInvoiceWorkflow` as well, using built-in WorkflowType/ExecutionStatus
 filters. Record expected counts before changes; the 417-run sample is not a full
 namespace census.
+For CLI 0.13.2, `workflow list --limit 0` exhausts pagination; verify that
+semantics against the installed CLI. Save each producer/invoice history with
+`workflow show --workflow-id '<id>' --run-id '<run>' --output json`, and
+authoritatively describe every pair. Invoice inputs identify invoice IDs; map
+them back to scoped subscriptions through approved read-only business access.
 
 ### 2. WRITE — stop producers and worker polling BEFORE registration
 
