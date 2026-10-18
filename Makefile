@@ -419,6 +419,11 @@ dev-setup:
 init-temporal:
 	@docker compose run --rm temporal-bootstrap
 
+.PHONY: test-temporal-bootstrap
+test-temporal-bootstrap:
+	go test -race ./internal/temporal/searchattr -run TestExplicitBootstrap -count=1
+	cd internal/ee/infrastructure/helm/tests && go test -race ./... -count=1
+
 .PHONY: apply-migration
 apply-migration:
 	@if [ -z "$(file)" ]; then \

@@ -41,16 +41,20 @@ open -a OrbStack && sleep 3
 ### 2. Start local infrastructure
 
 ```bash
-docker compose up -d postgres kafka clickhouse
+docker compose up -d postgres kafka clickhouse temporal temporal-ui
+make init-temporal
 sleep 10   # wait for Kafka to fully initialise
 ```
 
-Temporal is disabled by default in `.env.local`. To test workflows, start
-`docker compose up -d temporal temporal-ui`, run `make init-temporal` once to
-provision the five Keyword attributes, then set `FLEXPRICE_TEMPORAL_ENABLED=true`
-in the local override. `make dev-setup` and the Compose worker dependency do this
-bootstrap automatically. Never use the local provisioning job for a live billing
-backlog; follow [the recovery runbook](docs/temporal-search-attributes.md).
+`FLEXPRICE_DEPLOYMENT_MODE=local` (used by `make run-local`) always connects to
+Temporal and starts its workers. There is no `FLEXPRICE_TEMPORAL_ENABLED` toggle;
+that legacy environment variable is ignored. Start Temporal and run
+`make init-temporal` to provision the five Keyword attributes before local mode
+starts. `make dev-setup` and the Compose worker dependency perform this bootstrap
+automatically. Split API/consumer modes do not poll workflow tasks, but still
+construct a Temporal client and require the server to be reachable. Never use the
+local provisioning job for a live billing backlog; follow
+[the recovery runbook](docs/temporal-search-attributes.md).
 
 ### 3. Create Kafka topics
 

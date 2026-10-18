@@ -4,10 +4,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const query = "ExecutionStatus = 'Running' AND WorkflowType IN ('ProcessSubscriptionBillingWorkflow', 'DraftAndComputeSubscriptionInvoiceWorkflow')"
@@ -69,10 +72,29 @@ func main() {
 	address := flag.String("address", "", "required private Temporal frontend address")
 	namespace := flag.String("namespace", "", "required explicit namespace")
 	timeout := flag.Duration("timeout", 2*time.Hour, "total read deadline; no partial manifest on failure")
+	startedFrom := flag.String("started-from", "", "inclusive RFC3339 StartTime for a resumable time shard")
+	startedBefore := flag.String("started-before", "", "exclusive RFC3339 StartTime for a resumable time shard")
+	historyDir := flag.String("history-dir", "", "private local directory for complete histories, including full inputs; not an approved manifest")
 	flag.Parse()
-	if *address == "" || *namespace == "" {
+	if *address == "" || *namespace == "" || *timeout <= 0 {
 		fmt.Fprintln(os.Stderr, "--address and --namespace are required; output is a private, unapproved review manifest")
 		os.Exit(2)
+	}
+	shardQuery, err := queryForRange(*startedFrom, *startedBefore)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if *historyDir != "" {
+		if err := os.MkdirAll(*historyDir, 0700); err != nil {
+			fmt.Fprintln(os.Stderr, "cannot create private history directory")
+			os.Exit(1)
+		}
+		info, err := os.Stat(*historyDir)
+		if err != nil || info.Mode().Perm()&0077 != 0 {
+			fmt.Fprintln(os.Stderr, "history directory must be private (mode 0700)")
+			os.Exit(1)
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
@@ -82,7 +104,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer c.Close()
-	result, err := collect(ctx, *namespace, c.WorkflowService())
+	result, err := collectShard(ctx, *namespace, c.WorkflowService(), shardQuery, *historyDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -95,7 +117,35 @@ func main() {
 }
 
 func collect(ctx context.Context, namespace string, r reader) (*inventory, error) {
-	result := &inventory{Namespace: namespace, Query: query, CapturedAt: time.Now().UTC().Format(time.RFC3339), CanonicalPolicy: "none; operator approval and stable complete inventory required", Counts: map[string]int{"listed": 0, "subscriptions": 0, "running": 0, "surplus-over-one": 0, "terminate-preactivity": 0, "manual-reconciliation": 0, "closed-no-termination": 0}, Rows: []row{}}
+	return collectShard(ctx, namespace, r, query, "")
+}
+
+func queryForRange(from, before string) (string, error) {
+	q := query
+	var lower, upper time.Time
+	for _, bound := range []struct{ value, operator string }{{from, ">="}, {before, "<"}} {
+		if bound.value == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, bound.value)
+		if err != nil {
+			return "", fmt.Errorf("StartTime bounds must be RFC3339 timestamps")
+		}
+		if bound.operator == ">=" {
+			lower = t
+		} else {
+			upper = t
+		}
+		q += fmt.Sprintf(" AND StartTime %s '%s'", bound.operator, t.UTC().Format(time.RFC3339Nano))
+	}
+	if from != "" && before != "" && !lower.Before(upper) {
+		return "", fmt.Errorf("--started-from must precede --started-before")
+	}
+	return q, nil
+}
+
+func collectShard(ctx context.Context, namespace string, r reader, shardQuery, historyDir string) (*inventory, error) {
+	result := &inventory{Namespace: namespace, Query: shardQuery, CapturedAt: time.Now().UTC().Format(time.RFC3339), CanonicalPolicy: "none; operator approval and stable complete inventory required", Counts: map[string]int{"listed": 0, "subscriptions": 0, "running": 0, "surplus-over-one": 0, "terminate-preactivity": 0, "manual-reconciliation": 0, "closed-no-termination": 0}, Rows: []row{}}
 	seen := map[string]bool{}
 	groups := map[string]int{}
 	var page []byte
@@ -104,7 +154,7 @@ func collect(ctx context.Context, namespace string, r reader) (*inventory, error
 			return nil, err
 		}
 		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		list, err := r.ListWorkflowExecutions(callCtx, &workflowservice.ListWorkflowExecutionsRequest{Namespace: namespace, Query: query, PageSize: 100, NextPageToken: page})
+		list, err := r.ListWorkflowExecutions(callCtx, &workflowservice.ListWorkflowExecutionsRequest{Namespace: namespace, Query: shardQuery, PageSize: 100, NextPageToken: page})
 		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("visibility read failed; no complete inventory produced")
@@ -137,7 +187,7 @@ func collect(ctx context.Context, namespace string, r reader) (*inventory, error
 				x.Decision = "closed-no-termination"
 			} else {
 				var err error
-				x.scope, x.HistoryEvents, x.Decision, err = inspect(ctx, namespace, ex, r)
+				x.scope, x.HistoryEvents, x.Decision, err = inspect(ctx, namespace, ex, r, historyDir)
 				if err != nil {
 					return nil, fmt.Errorf("history inspection failed for %s; no complete inventory produced", key)
 				}
@@ -170,11 +220,12 @@ func collect(ctx context.Context, namespace string, r reader) (*inventory, error
 	return result, nil
 }
 
-func inspect(ctx context.Context, namespace string, ex *commonpb.WorkflowExecution, r reader) (scope, int, string, error) {
+func inspect(ctx context.Context, namespace string, ex *commonpb.WorkflowExecution, r reader, historyDir string) (scope, int, string, error) {
 	var input scope
 	count, starts := 0, 0
 	blocked, preactivity := false, true
 	var page []byte
+	var events []*historypb.HistoryEvent
 	for {
 		if err := pace(ctx); err != nil {
 			return input, count, "", err
@@ -186,6 +237,9 @@ func inspect(ctx context.Context, namespace string, ex *commonpb.WorkflowExecuti
 			return input, count, "", err
 		}
 		for _, e := range h.GetHistory().GetEvents() {
+			if historyDir != "" {
+				events = append(events, e)
+			}
 			if e.GetEventId() != int64(count+1) {
 				return input, count, "", fmt.Errorf("non-contiguous history")
 			}
@@ -212,10 +266,45 @@ func inspect(ctx context.Context, namespace string, ex *commonpb.WorkflowExecuti
 	if starts != 1 {
 		return input, count, "", fmt.Errorf("incomplete history")
 	}
+	if historyDir != "" {
+		if err := exportHistory(historyDir, namespace, ex, events); err != nil {
+			return input, count, "", fmt.Errorf("private history export failed")
+		}
+	}
 	if blocked && preactivity {
 		return input, count, "terminate-preactivity", nil
 	}
 	return input, count, "manual-reconciliation", nil
+}
+
+func exportHistory(dir, namespace string, ex *commonpb.WorkflowExecution, events []*historypb.HistoryEvent) error {
+	history, err := protojson.Marshal(&historypb.History{Events: events})
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(struct {
+		Namespace  string          `json:"namespace"`
+		WorkflowID string          `json:"workflow_id"`
+		RunID      string          `json:"run_id"`
+		History    json.RawMessage `json:"history"`
+	}{namespace, ex.GetWorkflowId(), ex.GetRunId(), history})
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".history-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	key := sha256.Sum256([]byte(namespace + "/" + ex.GetWorkflowId() + "/" + ex.GetRunId()))
+	return os.Rename(f.Name(), filepath.Join(dir, fmt.Sprintf("%x.json", key)))
 }
 
 // A committed WFT, activity, local-activity marker, signal, child or any other
