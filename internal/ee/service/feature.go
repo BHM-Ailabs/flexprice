@@ -389,6 +389,9 @@ func (s *featureService) DeleteFeature(ctx context.Context, id string) error {
 
 	feature, err := s.FeatureRepo.Get(ctx, id)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return err
+		}
 		return ierr.NewError(fmt.Sprintf("Feature with ID %s was not found", id)).
 			WithHint("The specified feature does not exist").
 			Mark(ierr.ErrNotFound)

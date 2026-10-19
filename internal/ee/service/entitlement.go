@@ -72,6 +72,9 @@ func (s *entitlementService) CreateEntitlement(ctx context.Context, req dto.Crea
 	case types.ENTITLEMENT_ENTITY_TYPE_PLAN:
 		entity, err = s.PlanRepo.Get(ctx, entityID)
 		if err != nil {
+			if !ierr.IsNotFound(err) {
+				return nil, err
+			}
 			return nil, ierr.WithError(err).
 				WithHint("Plan not found").
 				WithReportableDetails(map[string]interface{}{
@@ -82,6 +85,9 @@ func (s *entitlementService) CreateEntitlement(ctx context.Context, req dto.Crea
 	case types.ENTITLEMENT_ENTITY_TYPE_ADDON:
 		entity, err = s.AddonRepo.GetByID(ctx, entityID)
 		if err != nil {
+			if !ierr.IsNotFound(err) {
+				return nil, err
+			}
 			return nil, ierr.WithError(err).
 				WithHint("Addon not found").
 				WithReportableDetails(map[string]interface{}{
@@ -93,6 +99,9 @@ func (s *entitlementService) CreateEntitlement(ctx context.Context, req dto.Crea
 		// For subscription-scoped entitlements, validate subscription exists
 		entity, err = s.SubRepo.Get(ctx, entityID)
 		if err != nil {
+			if !ierr.IsNotFound(err) {
+				return nil, err
+			}
 			return nil, ierr.WithError(err).
 				WithHint("Subscription not found").
 				WithReportableDetails(map[string]interface{}{

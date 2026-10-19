@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect/sql"
+	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/samber/lo"
 )
@@ -12,6 +13,7 @@ import (
 type Predicate = func(*sql.Selector) // Ent aliases these under predicate.<Entity>
 type OrderFunc = func(*sql.Selector) // Ent aliases these under ent.<Entity>.Asc/Desc
 
+// FieldResolver maps locally known column names; it must not perform I/O.
 type FieldResolver func(logical string) (string, error)
 
 // QueryBuilder is a generic interface for Ent query builders
@@ -107,7 +109,7 @@ func BuildPredicates(filters []*types.FilterCondition, resolve FieldResolver) ([
 		}
 		fi, err := resolve(lo.FromPtr(f.Field))
 		if err != nil {
-			return nil, err
+			return nil, ierr.WithQueryValidation(err)
 		}
 		pred := predicateFromFilter(f, fi)
 		if pred != nil {
@@ -127,7 +129,7 @@ func BuildOrders(sort []*types.SortCondition, resolve FieldResolver) ([]OrderFun
 		}
 		fi, err := resolve(s.Field)
 		if err != nil {
-			return nil, err
+			return nil, ierr.WithQueryValidation(err)
 		}
 		var of OrderFunc
 

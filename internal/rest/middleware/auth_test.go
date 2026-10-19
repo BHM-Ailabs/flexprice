@@ -537,7 +537,7 @@ func TestAuthenticateMiddleware_EnvironmentLookupFailureIsNotForbidden(t *testin
 	req.Header.Set(types.HeaderEnvironment, "env_dev")
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
 // A JWT carries no roles claim, so the user record is the only thing that can

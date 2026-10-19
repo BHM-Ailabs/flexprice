@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -182,6 +183,29 @@ func IsNotImplemented(err error) bool {
 // ResolveError returns both the HTTP status code and machine-readable error
 // code for the given error in a single pass over errMappings.
 func ResolveError(err error) (httpStatus int, code ErrorCode) {
+	// Only proven dependency failures override contextual domain markers.
+	if IsServiceUnavailable(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return http.StatusServiceUnavailable, ErrCodeServiceUnavailable
+	}
+	if IsDatabase(err) {
+		if IsInfrastructureFailure(err) {
+			return http.StatusServiceUnavailable, ErrCodeDatabase
+		}
+		// Services sometimes add not-found/validation markers to every repo
+		// error. Trust those markers only with a deterministic domain cause;
+		// an unknown database failure must never imply an absent subscription.
+		if !hasDeterministicDomainCause(err) {
+			return http.StatusInternalServerError, ErrCodeDatabase
+		}
+	}
+	// Proven domain failures survive generic database wrappers. Resolve them
+	// before the unordered fallback map so a missing plan retains its 404.
+	for _, sentinel := range []error{ErrNotFound, ErrValidation, ErrInvalidOperation, ErrPermissionDenied, ErrAlreadyExists, ErrVersionConflict} {
+		if errors.Is(err, sentinel) {
+			m := errMappings[sentinel]
+			return m.Status, m.Code
+		}
+	}
 	for sentinel, m := range errMappings {
 		if errors.Is(err, sentinel) {
 			return m.Status, m.Code

@@ -234,12 +234,11 @@ func TestTenantStatusMiddleware(t *testing.T) {
 			wantInternalStatus: string(types.TenantInternalStatusTrialing),
 		},
 		{
-			name:       "service error returns 500",
-			method:     http.MethodGet,
-			tenantID:   "tenant-6",
-			svcErr:     errors.New("db unavailable"),
-			wantCode:   http.StatusInternalServerError,
-			wantErrMsg: "failed to verify tenant access",
+			name:     "service error returns 503",
+			method:   http.MethodGet,
+			tenantID: "tenant-6",
+			svcErr:   errors.New("db unavailable"),
+			wantCode: http.StatusServiceUnavailable,
 		},
 	}
 

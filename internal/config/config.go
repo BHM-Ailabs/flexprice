@@ -357,6 +357,7 @@ type PostgresConfig struct {
 	MaxOpenConns           int    `mapstructure:"max_open_conns" default:"10"`
 	MaxIdleConns           int    `mapstructure:"max_idle_conns" default:"5"`
 	ConnMaxLifetimeMinutes int    `mapstructure:"conn_max_lifetime_minutes" default:"60"`
+	ConnectTimeoutSeconds  int    `mapstructure:"connect_timeout_seconds"`
 	AutoMigrate            bool   `mapstructure:"auto_migrate" default:"false"`
 
 	// Reader endpoint configuration for read replicas
@@ -1154,15 +1155,23 @@ func (c ClickHouseConfig) GetClientOptions() *clickhouse.Options {
 	return options
 }
 
+func (c PostgresConfig) connectTimeoutSeconds() int {
+	if c.ConnectTimeoutSeconds > 0 {
+		return c.ConnectTimeoutSeconds
+	}
+	return 2
+}
+
 func (c PostgresConfig) GetDSN() string {
 	return fmt.Sprintf(
-		"user=%s password=%s dbname=%s host=%s port=%d sslmode=%s",
+		"user=%s password=%s dbname=%s host=%s port=%d sslmode=%s connect_timeout=%d",
 		c.User,
 		c.Password,
 		c.DBName,
 		c.Host,
 		c.Port,
 		c.SSLMode,
+		c.connectTimeoutSeconds(),
 	)
 }
 
@@ -1179,13 +1188,14 @@ func (c PostgresConfig) GetReaderDSN() string {
 	}
 
 	return fmt.Sprintf(
-		"user=%s password=%s dbname=%s host=%s port=%d sslmode=%s",
+		"user=%s password=%s dbname=%s host=%s port=%d sslmode=%s connect_timeout=%d",
 		c.User,
 		c.Password,
 		c.DBName,
 		host,
 		port,
 		c.SSLMode,
+		c.connectTimeoutSeconds(),
 	)
 }
 

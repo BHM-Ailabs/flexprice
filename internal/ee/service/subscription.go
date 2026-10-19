@@ -2481,6 +2481,9 @@ func (s *subscriptionService) ListSubscriptions(ctx context.Context, filter *typ
 			s.Logger.Error(ctx, "failed to resolve external customer ID",
 				"error", err,
 				"external_customer_id", filter.ExternalCustomerID)
+			if !ierr.IsNotFound(err) {
+				return nil, err
+			}
 			return nil, ierr.WithError(err).
 				WithHintf("Customer with external ID '%s' not found", filter.ExternalCustomerID).
 				WithReportableDetails(map[string]interface{}{
@@ -2758,6 +2761,9 @@ func (s *subscriptionService) GetSubscriptionsForCustomer(ctx context.Context, e
 		s.Logger.Error(ctx, "failed to resolve external customer ID",
 			"error", err,
 			"external_customer_id", externalCustomerID)
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHintf("Customer with external ID '%s' not found", externalCustomerID).
 			WithReportableDetails(map[string]interface{}{
@@ -4173,6 +4179,9 @@ func (s *subscriptionService) PauseSubscription(
 	// Get the subscription
 	sub, lineItems, err := s.SubRepo.GetWithLineItems(ctx, subscriptionID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHint("Failed to get subscription for pausing").
 			Mark(ierr.ErrNotFound)
@@ -4921,6 +4930,9 @@ func (s *subscriptionService) handleSubCoupons(
 		}
 		c, err := s.CouponRepo.GetByCode(ctx, input.CouponCode)
 		if err != nil {
+			if !ierr.IsNotFound(err) {
+				return err
+			}
 			return ierr.WithError(err).
 				WithHintf("Coupon with code '%s' not found", input.CouponCode).
 				Mark(ierr.ErrNotFound)
@@ -6663,6 +6675,9 @@ func (s *subscriptionService) GetSubscriptionEntitlements(ctx context.Context, s
 	// Get the subscription
 	sub, err := s.SubRepo.Get(ctx, subscriptionID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHint("Failed to get subscription").
 			WithReportableDetails(map[string]interface{}{
@@ -7012,6 +7027,9 @@ func (s *subscriptionService) ProcessSubscriptionEntitlementOverrides(
 			// The entitlement is not in the plan, check if it might be an addon entitlement
 			// by fetching the entitlement directly to give a better error message
 			checkEnt, err := s.EntitlementRepo.Get(ctx, override.EntitlementID)
+			if err != nil && !ierr.IsNotFound(err) {
+				return err
+			}
 			if err == nil && checkEnt != nil {
 				// Entitlement exists but is not a plan entitlement
 				if checkEnt.EntityType == types.ENTITLEMENT_ENTITY_TYPE_ADDON {
@@ -7460,6 +7478,9 @@ func (s *subscriptionService) TriggerSubscriptionWorkflow(ctx context.Context, s
 	// Fetch the subscription to get current period details
 	sub, err := s.SubRepo.Get(ctx, subscriptionID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHint("Failed to fetch subscription").
 			WithReportableDetails(map[string]interface{}{

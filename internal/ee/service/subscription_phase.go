@@ -39,6 +39,9 @@ func (s *subscriptionPhaseService) CreateSubscriptionPhase(ctx context.Context, 
 	// Validate subscription exists
 	sub, err := s.SubRepo.Get(ctx, req.SubscriptionID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHint("Subscription not found").
 			Mark(ierr.ErrNotFound)
@@ -168,6 +171,9 @@ func (s *subscriptionPhaseService) DeleteSubscriptionPhase(ctx context.Context, 
 
 	phase, err := s.SubscriptionPhaseRepo.Get(ctx, id)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return err
+		}
 		return ierr.WithError(err).
 			WithHint(fmt.Sprintf("Subscription phase with ID %s not found", id)).
 			Mark(ierr.ErrNotFound)

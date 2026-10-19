@@ -150,7 +150,7 @@ func (r *entityIntegrationMappingRepository) Get(ctx context.Context, id string)
 		SetSpanError(span, err)
 
 		if ent.IsNotFound(err) {
-			return nil, ierr.NewError("entity integration mapping not found").
+			return nil, ierr.WithError(err).
 				WithHint("The specified entity integration mapping does not exist").
 				WithReportableDetails(map[string]any{
 					"mapping_id": id,
@@ -336,7 +336,7 @@ func (r *entityIntegrationMappingRepository) Delete(ctx context.Context, mapping
 		SetSpanError(span, err)
 
 		if ent.IsNotFound(err) {
-			return ierr.NewError("entity integration mapping not found").
+			return ierr.WithError(err).
 				WithHint("The specified entity integration mapping does not exist").
 				WithReportableDetails(map[string]any{
 					"mapping_id": mapping.ID,

@@ -1158,6 +1158,9 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	// Get the task
 	t, err := s.TaskRepo.Get(ctx, id)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return "", err
+		}
 		return "", ierr.WithError(err).
 			WithHint("Failed to get task").
 			Mark(ierr.ErrNotFound)
@@ -1211,6 +1214,9 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	scheduledTask, err := s.ScheduledTaskRepo.Get(ctx, t.ScheduledTaskID)
 	if err != nil {
 		s.Logger.Error(ctx, "failed to get scheduled task", "error", err, "scheduled_task_id", t.ScheduledTaskID)
+		if !ierr.IsNotFound(err) {
+			return "", err
+		}
 		return "", ierr.WithError(err).
 			WithHint("Failed to get scheduled task").
 			Mark(ierr.ErrNotFound)
@@ -1230,6 +1236,9 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	conn, err := s.ConnectionRepo.Get(ctx, scheduledTask.ConnectionID)
 	if err != nil {
 		s.Logger.Error(ctx, "failed to get connection", "error", err, "connection_id", scheduledTask.ConnectionID)
+		if !ierr.IsNotFound(err) {
+			return "", err
+		}
 		return "", ierr.WithError(err).
 			WithHint("Failed to get connection").
 			Mark(ierr.ErrNotFound)

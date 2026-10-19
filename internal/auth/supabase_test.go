@@ -2,7 +2,13 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	ierr "github.com/flexprice/flexprice/internal/errors"
+	"github.com/nedpals/supabase-go"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/flexprice/flexprice/internal/config"
 	"github.com/golang-jwt/jwt/v4"
@@ -55,4 +61,24 @@ func TestSupabaseDevTokenEnvironmentID(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, claims.EnvironmentID)
 	})
+}
+
+func TestSupabaseLoginAvailability(t *testing.T) {
+	for _, status := range []int{400, 429, 500, 503} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"error_code":"invalid_credentials","msg":"synthetic denial"}`))
+			}))
+			defer server.Close()
+			client := supabase.CreateClient(server.URL, "synthetic")
+			client.HTTPClient = &http.Client{Transport: &authDependencyTransport{base: http.DefaultTransport}, Timeout: time.Second}
+			provider := &supabaseAuth{client: client}
+			_, err := provider.Login(context.Background(), AuthRequest{Email: "synthetic@example.com", Password: "synthetic"}, nil)
+			require.Error(t, err)
+			require.Equal(t, status >= 429, ierr.IsServiceUnavailable(err))
+			require.Equal(t, status == 400, ierr.IsPermissionDenied(err))
+		})
+	}
 }

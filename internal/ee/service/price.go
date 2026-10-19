@@ -218,6 +218,9 @@ func (s *priceService) validateEntityExists(ctx context.Context, entityType type
 	case types.PRICE_ENTITY_TYPE_PLAN:
 		plan, err := s.PlanRepo.Get(ctx, entityID)
 		if err != nil || plan == nil {
+			if err != nil && !ierr.IsNotFound(err) {
+				return err
+			}
 			return ierr.NewError("plan not found").
 				WithHint("The specified plan does not exist").
 				WithReportableDetails(map[string]interface{}{
@@ -228,6 +231,9 @@ func (s *priceService) validateEntityExists(ctx context.Context, entityType type
 	case types.PRICE_ENTITY_TYPE_ADDON:
 		addon, err := s.AddonRepo.GetByID(ctx, entityID)
 		if err != nil || addon == nil {
+			if err != nil && !ierr.IsNotFound(err) {
+				return err
+			}
 			return ierr.NewError("addon not found").
 				WithHint("The specified addon does not exist").
 				WithReportableDetails(map[string]interface{}{
@@ -238,6 +244,9 @@ func (s *priceService) validateEntityExists(ctx context.Context, entityType type
 	case types.PRICE_ENTITY_TYPE_SUBSCRIPTION:
 		subscription, err := s.SubRepo.Get(ctx, entityID)
 		if err != nil || subscription == nil {
+			if err != nil && !ierr.IsNotFound(err) {
+				return err
+			}
 			return ierr.NewError("subscription not found").
 				WithHint("The specified subscription does not exist").
 				WithReportableDetails(map[string]interface{}{
@@ -248,6 +257,9 @@ func (s *priceService) validateEntityExists(ctx context.Context, entityType type
 	case types.PRICE_ENTITY_TYPE_COSTSHEET:
 		costsheet, err := s.CostSheetRepo.GetByID(ctx, entityID)
 		if err != nil || costsheet == nil {
+			if err != nil && !ierr.IsNotFound(err) {
+				return err
+			}
 			return ierr.NewError("costsheet not found").
 				WithHint("The specified costsheet  does not exist").
 				WithReportableDetails(map[string]interface{}{

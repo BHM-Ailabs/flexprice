@@ -163,6 +163,9 @@ func (s *authService) Login(ctx context.Context, req *dto.LoginRequest) (*dto.Au
 	}, auth)
 
 	if err != nil {
+		if ierr.IsServiceUnavailable(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, ierr.WithError(err).Mark(ierr.ErrServiceUnavailable)
+		}
 		// Same generic response as the unknown-email and identity-mismatch cases
 		// so none of the three is distinguishable to an enumerating caller.
 		return nil, ierr.WithError(err).

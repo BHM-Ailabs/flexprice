@@ -538,6 +538,9 @@ func (s *taxService) CreateTaxAssociation(ctx context.Context, req *dto.CreateTa
 			s.Logger.Error(ctx, "failed to resolve external customer ID",
 				"error", err,
 				"external_customer_id", req.ExternalCustomerID)
+			if !ierr.IsNotFound(err) {
+				return nil, err
+			}
 			return nil, ierr.WithError(err).
 				WithHintf("Customer with external ID '%s' not found", req.ExternalCustomerID).
 				WithReportableDetails(map[string]interface{}{
@@ -741,6 +744,9 @@ func (s *taxService) ListTaxAssociations(ctx context.Context, filter *types.TaxA
 			s.Logger.Error(ctx, "failed to resolve external customer ID",
 				"error", err,
 				"external_customer_id", filter.ExternalCustomerID)
+			if !ierr.IsNotFound(err) {
+				return nil, err
+			}
 			return nil, ierr.WithError(err).
 				WithHintf("Customer with external ID '%s' not found", filter.ExternalCustomerID).
 				WithReportableDetails(map[string]interface{}{

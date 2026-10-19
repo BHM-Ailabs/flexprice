@@ -147,6 +147,7 @@ clickhouse:
   read_timeout: 0s
 
 postgres:
+  connect_timeout_seconds: 2 # Bounds new connections; auth queries also have a two-second context deadline.
   host: 127.0.0.1 # For local mode
   # Will be overridden by FLEXPRICE_POSTGRES_HOST env var in Docker
   port: 5432

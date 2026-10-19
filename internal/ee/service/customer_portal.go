@@ -72,6 +72,9 @@ func (s *customerPortalService) CreatePortalSession(ctx context.Context, externa
 	// Look up the customer by external ID
 	customer, err := s.customerService.GetCustomerByLookupKey(ctx, externalID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.WithError(err).
 			WithHint("Customer not found with the provided external_customer_id").
 			Mark(ierr.ErrNotFound)

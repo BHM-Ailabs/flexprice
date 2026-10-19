@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/flexprice/flexprice/internal/auth"
 	"github.com/flexprice/flexprice/internal/config"
@@ -17,10 +18,20 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const authLookupTimeout = 2 * time.Second
+
+func abortDependencyUnavailable(c *gin.Context) {
+	c.Header("Retry-After", "5")
+	c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+		"error": "Service temporarily unavailable",
+		"code":  "service_unavailable",
+	})
+}
+
 // validateAPIKey validates the API key against the config first, then the database.
-func validateAPIKey(ctx context.Context, cfg *config.Configuration, secretService service.SecretService, apiKey string) (tenantID, userID, environmentID, userType string, roles []string, valid bool) {
+func validateAPIKey(ctx context.Context, cfg *config.Configuration, secretService service.SecretService, apiKey string) (tenantID, userID, environmentID, userType string, roles []string, valid bool, err error) {
 	if apiKey == "" {
-		return "", "", "", "", nil, false
+		return "", "", "", "", nil, false, nil
 	}
 
 	// First check in config
@@ -28,19 +39,28 @@ func validateAPIKey(ctx context.Context, cfg *config.Configuration, secretServic
 	if valid {
 		// Config keys are operator-provisioned and carry no database record to
 		// hold roles, so they are granted full access explicitly.
-		return tenantID, userID, "", "", []string{types.RoleSuperAdmin.String()}, true
+		return tenantID, userID, "", "", []string{types.RoleSuperAdmin.String()}, true, nil
 	}
 
 	// If not found in config, check in database
 	if secretService != nil {
-		secret, err := secretService.VerifyAPIKey(ctx, apiKey)
-		if err == nil && secret != nil {
-			// Return roles from the secret for RBAC permission checks
-			return secret.TenantID, secret.UserID, secret.EnvironmentID, secret.UserType, secret.Roles, true
+		lookupCtx, cancel := context.WithTimeout(ctx, authLookupTimeout)
+		defer cancel()
+		secret, err := secretService.VerifyAPIKey(lookupCtx, apiKey)
+		if err != nil {
+			if ierr.IsValidation(err) || ierr.IsNotFound(err) {
+				return "", "", "", "", nil, false, nil
+			}
+			return "", "", "", "", nil, false, err
 		}
+		if secret == nil {
+			return "", "", "", "", nil, false, ierr.ErrServiceUnavailable
+		}
+		// Return roles from the secret for RBAC permission checks.
+		return secret.TenantID, secret.UserID, secret.EnvironmentID, secret.UserType, secret.Roles, true, nil
 	}
 
-	return "", "", "", "", nil, false
+	return "", "", "", "", nil, false, nil
 }
 
 // errEnvironmentUnresolved signals that no environment could be established for
@@ -80,7 +100,9 @@ func resolveEnvironmentID(ctx context.Context, c *gin.Context, environmentRepo d
 		return "", errEnvironmentUnresolved
 	}
 
-	env, err := environmentRepo.Get(ctx, requested)
+	lookupCtx, cancel := context.WithTimeout(ctx, authLookupTimeout)
+	defer cancel()
+	env, err := environmentRepo.Get(lookupCtx, requested)
 	if err != nil {
 		// Absence means the environment does not exist or belongs to another
 		// tenant, which is a refusal. Anything else is an infrastructure
@@ -172,7 +194,7 @@ func setContextValues(c *gin.Context, environmentRepo domainEnvironment.Reposito
 // another tenant — is an access decision and yields 403; that response
 // deliberately does not distinguish the two so it cannot be used to probe for
 // foreign environment IDs. Anything else means the lookup itself failed, which
-// is a 500: reporting a database outage as an access denial hides the fault and
+// is a 503: reporting a database outage as an access denial hides the fault and
 // tells the caller not to retry something that is in fact retryable.
 func abortEnvironmentResolution(c *gin.Context, log *logger.Logger, err error, tenantID, userID string) {
 	if !errors.Is(err, errEnvironmentUnresolved) {
@@ -182,11 +204,7 @@ func abortEnvironmentResolution(c *gin.Context, log *logger.Logger, err error, t
 			"user_id", userID,
 			"requested_environment_id", c.GetHeader(types.HeaderEnvironment),
 		)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Internal server error",
-			"message": "Failed to resolve environment",
-		})
-		c.Abort()
+		abortDependencyUnavailable(c)
 		return
 	}
 
@@ -212,7 +230,12 @@ func GuestAuthenticateMiddleware(c *gin.Context) {
 func APIKeyAuthMiddleware(cfg *config.Configuration, secretService service.SecretService, environmentRepo domainEnvironment.Repository, logger *logger.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		apiKey := c.GetHeader(cfg.Auth.APIKey.Header)
-		tenantID, userID, environmentID, userType, roles, valid := validateAPIKey(c.Request.Context(), cfg, secretService, apiKey)
+		tenantID, userID, environmentID, userType, roles, valid, err := validateAPIKey(c.Request.Context(), cfg, secretService, apiKey)
+		if err != nil {
+			logger.Error(c.Request.Context(), "API key verification unavailable", "error", ierr.SanitizedDependencyError(err))
+			abortDependencyUnavailable(c)
+			return
+		}
 		if !valid {
 			logger.Debug(c.Request.Context(), "invalid api key")
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
@@ -237,7 +260,12 @@ func AuthenticateMiddleware(cfg *config.Configuration, secretService service.Sec
 	return func(c *gin.Context) {
 		// First check for API key
 		apiKey := c.GetHeader(cfg.Auth.APIKey.Header)
-		tenantID, userID, environmentID, userType, roles, valid := validateAPIKey(c.Request.Context(), cfg, secretService, apiKey)
+		tenantID, userID, environmentID, userType, roles, valid, err := validateAPIKey(c.Request.Context(), cfg, secretService, apiKey)
+		if err != nil {
+			logger.Error(c.Request.Context(), "API key verification unavailable", "error", ierr.SanitizedDependencyError(err))
+			abortDependencyUnavailable(c)
+			return
+		}
 		if valid {
 			if err := setContextValues(c, environmentRepo, tenantID, userID, environmentID, userType, roles); err != nil {
 				abortEnvironmentResolution(c, logger, err, tenantID, userID)
@@ -273,17 +301,19 @@ func AuthenticateMiddleware(cfg *config.Configuration, secretService service.Sec
 					c.JSON(http.StatusForbidden, gin.H{"error": "Plaqad Super Admin access required"})
 				default:
 					logger.Error(c.Request.Context(), "Plaqad admin authorization failed", "error", err)
-					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Authorization service unavailable"})
+					abortDependencyUnavailable(c)
 				}
 				c.Abort()
 				return
 			}
 
 			tenantCtx := types.SetTenantID(c.Request.Context(), cfg.Auth.Plaqad.TenantID)
-			mappedUser, err := userRepo.GetByID(tenantCtx, cfg.Auth.Plaqad.UserID)
+			lookupCtx, cancel := context.WithTimeout(tenantCtx, authLookupTimeout)
+			mappedUser, err := userRepo.GetByID(lookupCtx, cfg.Auth.Plaqad.UserID)
+			cancel()
 			if err != nil || mappedUser == nil || mappedUser.Status != types.StatusPublished || !hasRole(mappedUser.Roles, types.RoleSuperAdmin.String()) {
 				logger.Error(c.Request.Context(), "Plaqad dashboard principal is unavailable", "error", "mapped Flexprice user is missing, inactive, or not a super_admin", "plaqad_user_id", identity.ID)
-				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Dashboard authorization is not configured"})
+				abortDependencyUnavailable(c)
 				c.Abort()
 				return
 			}
@@ -315,7 +345,9 @@ func AuthenticateMiddleware(cfg *config.Configuration, secretService service.Sec
 		// of the session's permissions. The lookup is scoped to the tenant the
 		// token names, since the repository takes it from the context.
 		tenantCtx := types.SetTenantID(c.Request.Context(), claims.TenantID)
-		user, err := userRepo.GetByID(tenantCtx, claims.UserID)
+		lookupCtx, cancel := context.WithTimeout(tenantCtx, authLookupTimeout)
+		user, err := userRepo.GetByID(lookupCtx, claims.UserID)
+		cancel()
 		if err != nil {
 			if ierr.IsNotFound(err) {
 				logger.Info(c.Request.Context(), "rejecting token for a user that no longer exists",
@@ -327,7 +359,7 @@ func AuthenticateMiddleware(cfg *config.Configuration, secretService service.Sec
 				return
 			}
 			logger.Error(c.Request.Context(), "failed to load user roles", "error", err, "user_id", claims.UserID)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+			abortDependencyUnavailable(c)
 			c.Abort()
 			return
 		}

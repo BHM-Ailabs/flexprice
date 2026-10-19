@@ -570,6 +570,9 @@ func (s *walletService) loadWalletsForExpansion(ctx context.Context, expand type
 func (s *walletService) TopUpWallet(ctx context.Context, walletID string, req *dto.TopUpWalletRequest) (*dto.TopUpWalletResponse, error) {
 	w, err := s.WalletRepo.GetWalletByID(ctx, walletID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return nil, err
+		}
 		return nil, ierr.NewError("Wallet not found").
 			WithHint("Wallet not found").
 			Mark(ierr.ErrNotFound)
@@ -1170,6 +1173,9 @@ func (s *walletService) completePurchasedCreditTransaction(ctx context.Context, 
 	// authoritative status check runs again under the lock below.
 	tx, err := s.WalletRepo.GetTransactionByID(ctx, walletTransactionID)
 	if err != nil {
+		if !ierr.IsNotFound(err) {
+			return err
+		}
 		return ierr.WithError(err).
 			WithHint("Failed to get wallet transaction").
 			Mark(ierr.ErrNotFound)
@@ -1227,6 +1233,9 @@ func (s *walletService) completePurchasedCreditTransaction(ctx context.Context, 
 		var err error
 		tx, err = s.WalletRepo.GetTransactionByID(ctx, walletTransactionID)
 		if err != nil {
+			if !ierr.IsNotFound(err) {
+				return err
+			}
 			return ierr.WithError(err).
 				WithHint("Failed to get wallet transaction").
 				Mark(ierr.ErrNotFound)
@@ -1248,6 +1257,9 @@ func (s *walletService) completePurchasedCreditTransaction(ctx context.Context, 
 		// Re-read wallet under the lock — authoritative balance.
 		w, err = s.WalletRepo.GetWalletByID(ctx, tx.WalletID)
 		if err != nil {
+			if !ierr.IsNotFound(err) {
+				return err
+			}
 			return ierr.WithError(err).
 				WithHint("Failed to get wallet").
 				Mark(ierr.ErrNotFound)
