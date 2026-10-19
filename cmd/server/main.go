@@ -30,6 +30,7 @@ import (
 	"github.com/flexprice/flexprice/internal/temporal/client"
 	"github.com/flexprice/flexprice/internal/temporal/models"
 	"github.com/flexprice/flexprice/internal/temporal/queries"
+	"github.com/flexprice/flexprice/internal/temporal/searchattr"
 	temporalservice "github.com/flexprice/flexprice/internal/temporal/service"
 	"github.com/flexprice/flexprice/internal/temporal/worker"
 	"github.com/flexprice/flexprice/internal/tracing"
@@ -557,7 +558,7 @@ func startServer(
 		// Register all handlers and start router once
 		registerRouterHandlers(router, webhookService, integrationEventService, onboardingService, eventConsumptionSvc, costSheetUsageSvc, walletBalanceAlertSvc, rawEventConsumptionSvc, meterUsageTrackingSvc, cfg, true)
 		startRouter(lc, router, log)
-		startTemporalWorker(lc, log, temporalClient, temporalService, params, webhookService)
+		startTemporalWorker(lc, log, temporalClient, temporalService, params, webhookService, cfg.Temporal.Namespace)
 	case types.ModeAPI:
 		startAPIServer(lc, r, cfg, log)
 
@@ -571,7 +572,7 @@ func startServer(
 		// consumed and delivered via Svix/native in the same process.
 		registerRouterHandlers(router, webhookService, integrationEventService, onboardingService, eventConsumptionSvc, costSheetUsageSvc, walletBalanceAlertSvc, rawEventConsumptionSvc, meterUsageTrackingSvc, cfg, false)
 		startRouter(lc, router, log)
-		startTemporalWorker(lc, log, temporalClient, temporalService, params, webhookService)
+		startTemporalWorker(lc, log, temporalClient, temporalService, params, webhookService, cfg.Temporal.Namespace)
 	case types.ModeConsumer:
 		if consumer == nil {
 			log.Fatal(context.Background(), "Kafka consumer required for consumer mode")
@@ -592,9 +593,18 @@ func startTemporalWorker(
 	temporalService temporalservice.TemporalService,
 	params service.ServiceParams,
 	webhookService *webhook.WebhookService,
+	namespace string,
 ) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
+			// Validate before schedule updates or polling. A server-side rejected
+			// search-attribute command cannot be caught inside workflow code.
+			validationCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := searchattr.ValidateRegistration(validationCtx, namespace, temporalClient.GetRawClient().OperatorService())
+			cancel()
+			if err != nil {
+				return fmt.Errorf("validate Temporal namespace before worker startup: %w", err)
+			}
 			if err := temporalservice.EnsureSchedules(ctx, temporalClient, log); err != nil {
 				return fmt.Errorf("ensure temporal server schedules: %w", err)
 			}

@@ -1,22 +1,18 @@
 package searchattr
 
-// This package provides FAIL-SAFE helper functions for setting Temporal custom search attributes.
+// This package queues custom search attribute commands for workflow visibility.
+// The attributes must be registered in the workflow's namespace before workers
+// start (ValidateRegistration checks this outside workflow execution).
 //
-// PRODUCTION SAFETY GUARANTEES:
-// 1. All functions are wrapped in panic recovery - they will NEVER crash a workflow
-// 2. All errors are logged as warnings, not errors - they will NEVER fail a workflow
-// 3. All inputs are validated with early returns - invalid data is handled gracefully
-// 4. If search attributes are not registered in Temporal, workflows continue normally
-//
-// This means:
-// - If Temporal doesn't have search attributes registered: Workflow runs fine, just logs warnings
-// - If there's a bug in this code: Workflow runs fine, panic is recovered
-// - If Temporal API changes: Workflow runs fine, error is logged
-//
-// The workflow's core business logic is COMPLETELY ISOLATED from search attribute functionality.
+// Panic recovery and warning logs handle local SDK errors only. A successful
+// UpsertSearchAttributes call does not validate server registration: rejection
+// happens when Temporal completes the workflow task and can prevent all commands
+// in that task, including activity scheduling, from being committed.
 
 import (
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"go.temporal.io/sdk/workflow"
 )
@@ -29,6 +25,11 @@ const (
 	SearchAttributeSubscriptionID  = "SubscriptionID"
 	SearchAttributeTenantID        = "TenantID"
 	SearchAttributeEnvironmentID   = "EnvironmentID"
+
+	// Temporal 1.26.2 PostgreSQL visibility stores Keyword in VARCHAR(255).
+	// At most 255 runes also fits the 2048-byte JSON payload limit, even when
+	// every rune needs a six-byte JSON escape (255*6 + quotes = 1532).
+	maxKeywordRunes = 255
 )
 
 // UpsertFailureSearchAttributes upserts search attributes when an activity fails
@@ -75,7 +76,7 @@ func UpsertFailureSearchAttributes(
 
 	// Safely add activity name
 	if activityName != "" {
-		searchAttrs[SearchAttributeFailingActivity] = activityName
+		searchAttrs[SearchAttributeFailingActivity] = boundedKeyword(activityName)
 	}
 
 	// Safely add failure reason
@@ -83,12 +84,11 @@ func UpsertFailureSearchAttributes(
 	if err != nil {
 		errMsg = err.Error()
 	}
-	// Temporal has a 2048 byte limit - truncate to 2000 bytes to be safe
-	searchAttrs[SearchAttributeFailureReason] = truncateStringByBytes(errMsg, 2000)
+	searchAttrs[SearchAttributeFailureReason] = boundedKeyword(errMsg)
 
 	// Safely add subscription ID if provided
 	if subscriptionID != "" {
-		searchAttrs[SearchAttributeSubscriptionID] = subscriptionID
+		searchAttrs[SearchAttributeSubscriptionID] = keywordIdentity(subscriptionID)
 	}
 
 	// Upsert the search attributes - if this fails, only log warning
@@ -97,9 +97,9 @@ func UpsertFailureSearchAttributes(
 		logger.Warn("Failed to upsert failure search attributes (non-critical)",
 			"activity", activityName,
 			"upsert_error", upsertErr.Error(),
-			"note", "This does not affect workflow execution")
+			"note", "Local SDK error; server-side validation occurs on workflow-task completion")
 	} else {
-		logger.Debug("Upserted failure search attributes",
+		logger.Debug("Queued failure search attribute command",
 			"activity", activityName,
 			"failure_reason_preview", truncateString(errMsg, 100))
 	}
@@ -108,8 +108,8 @@ func UpsertFailureSearchAttributes(
 // UpsertWorkflowSearchAttributes upserts general workflow search attributes
 // Useful for setting searchable metadata at workflow start
 //
-// FAIL-SAFE: This function will NEVER panic or cause workflow to fail.
-// If search attribute upsert fails, it only logs a warning and continues.
+// Local SDK failures are logged. Server-side command validation still requires
+// the namespace contract to have been validated before worker startup.
 //
 // Example usage:
 //
@@ -134,23 +134,43 @@ func UpsertWorkflowSearchAttributes(ctx workflow.Context, attrs map[string]inter
 	}()
 
 	logger := workflow.GetLogger(ctx)
-
+	// Never shorten an identity into a different searchable identity. Invalid
+	// metadata is cleared; the actual workflow input/tenant context is unchanged.
+	// Keep the existing upsert command and keys, including during replay.
+	safeAttrs := make(map[string]interface{}, len(attrs))
+	for name, value := range attrs {
+		switch name {
+		case SearchAttributeSubscriptionID, SearchAttributeTenantID, SearchAttributeEnvironmentID:
+			id, ok := value.(string)
+			if !ok || !validKeywordID(id) {
+				logger.Warn("Cleared invalid Keyword identity metadata", "attribute", name)
+				value = ""
+			}
+		case SearchAttributeFailingActivity, SearchAttributeFailureReason:
+			message, ok := value.(string)
+			if !ok {
+				message = ""
+			}
+			value = boundedKeyword(message)
+		}
+		safeAttrs[name] = value
+	}
 	// Attempt to upsert - if this fails, only log warning
-	if err := workflow.UpsertSearchAttributes(ctx, attrs); err != nil {
+	if err := workflow.UpsertSearchAttributes(ctx, safeAttrs); err != nil {
 		// Don't fail the workflow, just log a warning
 		logger.Warn("Failed to upsert workflow search attributes (non-critical)",
 			"error", err.Error(),
 			"attribute_count", len(attrs),
-			"note", "This does not affect workflow execution")
+			"note", "Local SDK error; server-side validation occurs on workflow-task completion")
 	} else {
-		logger.Debug("Upserted workflow search attributes", "count", len(attrs))
+		logger.Debug("Queued workflow search attribute command", "count", len(attrs))
 	}
 }
 
 // ClearFailureSearchAttributes clears failure-related search attributes
 // Useful when retrying after a failure
 //
-// FAIL-SAFE: This function will NEVER panic or cause workflow to fail.
+// Server-side command validation requires registered namespace attributes.
 func ClearFailureSearchAttributes(ctx workflow.Context) {
 	// Fail-safe: Early return if context is invalid
 	if ctx == nil {
@@ -179,7 +199,7 @@ func ClearFailureSearchAttributes(ctx workflow.Context) {
 		// Don't fail the workflow, just log a warning
 		logger.Warn("Failed to clear failure search attributes (non-critical)",
 			"error", err.Error(),
-			"note", "This does not affect workflow execution")
+			"note", "Local SDK error; server-side validation occurs on workflow-task completion")
 	}
 }
 
@@ -208,47 +228,27 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
-// truncateStringByBytes truncates a string to the specified byte limit
-// This is important for Temporal search attributes which have byte limits, not character limits
-// FAIL-SAFE: Returns empty string on any error
-func truncateStringByBytes(s string, maxBytes int) string {
-	defer func() {
-		if r := recover(); r != nil {
-			// Silently recover from any panic
-		}
-	}()
-
-	if s == "" || maxBytes <= 0 {
-		return ""
-	}
-
-	// If string is already within limit, return as-is
-	if len(s) <= maxBytes {
+// boundedKeyword preserves complete Unicode characters and removes NUL, which
+// PostgreSQL JSONB cannot store. Full diagnostics remain in activity failures;
+// FailureReason is only a bounded, exact-match preview.
+func boundedKeyword(s string) string {
+	s = strings.ReplaceAll(strings.ToValidUTF8(s, "\uFFFD"), "\x00", "\uFFFD")
+	runes := []rune(s)
+	if len(runes) <= maxKeywordRunes {
 		return s
 	}
+	return string(runes[:maxKeywordRunes-3]) + "..."
+}
 
-	// Truncate by bytes, ensuring we don't cut in the middle of a multi-byte character
-	ellipsis := "..."
-	maxBytes -= len(ellipsis) // Reserve space for ellipsis
+func validKeywordID(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, '\x00') && utf8.RuneCountInString(s) <= maxKeywordRunes
+}
 
-	if maxBytes <= 0 {
+func keywordIdentity(s string) string {
+	if !validKeywordID(s) {
 		return ""
 	}
-
-	// Start from maxBytes and walk backward to find a valid UTF-8 boundary
-	truncated := s
-	for len(truncated) > maxBytes {
-		// Remove last rune to ensure we don't cut in middle of multi-byte char
-		truncated = truncated[:len(truncated)-1]
-	}
-
-	// Trim to the last complete UTF-8 character
-	for len(truncated) > 0 && len(truncated) > maxBytes {
-		// Move back one byte at a time until we're under the limit
-		truncated = truncated[:len(truncated)-1]
-	}
-
-	return truncated + ellipsis
+	return s
 }
 
 // GetSearchAttributeQueries returns example queries for filtering workflows

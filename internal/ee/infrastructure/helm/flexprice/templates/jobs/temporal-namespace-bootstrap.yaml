@@ -14,6 +14,7 @@
   schema-setup hooks complete and the frontend service is reachable.
 */}}
 {{- if and .Values.temporalConfig.enabled (gt (len (default (list) .Values.temporalConfig.bootstrapNamespaces)) 0) }}
+{{- $bootstrapScript := required "Temporal bootstrap script missing from chart package: files/bootstrap-temporal-search-attributes.sh" (.Files.Get "files/bootstrap-temporal-search-attributes.sh") }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -73,6 +74,12 @@ spec:
               {{- range $ns := .Values.temporalConfig.bootstrapNamespaces }}
               echo "Registering namespace: {{ $ns.name }} (retention {{ $ns.retention | default "72h" }})"
               temporal --address "${TEMPORAL_ADDRESS}" operator namespace create --namespace {{ $ns.name | quote }} --retention {{ $ns.retention | default "72h" | quote }}{{ with $ns.description }} --description {{ . | quote }}{{ end }} 2>&1 | grep -v 'Namespace .* already (exists|registered)' || true
+              # Fail on namespace/read/type/registration errors. This explicit
+              # provisioning hook is not a live backlog-recovery mechanism.
+              (
+                export TEMPORAL_NAMESPACE={{ $ns.name | quote }}
+                {{- $bootstrapScript | nindent 16 }}
+              )
               {{- end }}
               echo "Temporal namespace bootstrap complete."
           resources:

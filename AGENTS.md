@@ -624,9 +624,9 @@ Then `curl http://localhost:8080/health` → `{"status":"ok"}`. Auth for `/v1/*`
 - **Use `make migrate-local`, never `make migrate-ent`** for local Ent migrations —
   `migrate-ent` reads `.env` (which can point at production); `migrate-local` reads the
   committed `.env.local`. Same warning in `LOCAL_TESTING.md`.
-- **Temporal is disabled by default locally** (`FLEXPRICE_TEMPORAL_ENABLED="false"` in
-  `.env.local`), so `make run-local` boots even if the `temporal` container is not up. Set
-  it to `true` (and start the container) only when testing workflows.
+- **Local mode requires Temporal.** `FLEXPRICE_DEPLOYMENT_MODE=local` starts workers;
+  the legacy `FLEXPRICE_TEMPORAL_ENABLED` variable is ignored. Start Temporal and run
+  `make init-temporal` before `make run-local` (see `LOCAL_TESTING.md`).
 - **`make init-kafka` does not create the webhook topic.** The webhook consumer subscribes
   to `flexprice_system_events` (from `webhook.topic` in `config.yaml`), which is not in the
   `init-kafka` list. Without it the server logs a harmless-but-noisy `topic ... does not
