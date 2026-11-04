@@ -24,7 +24,8 @@ type PaymentService = interfaces.PaymentService
 
 type paymentService struct {
 	ServiceParams
-	idempGen *idempotency.Generator
+	idempGen           *idempotency.Generator
+	retrySuccessReader paymentRetrySuccessReader
 }
 
 // NewPaymentService creates a new payment service
@@ -402,13 +403,29 @@ func (s *paymentService) UpdatePayment(ctx context.Context, id string, req dto.U
 	// Status observed before any mutation. The write below is conditioned on it
 	// so the lifecycle check and the update apply as one atomic step.
 	observedStatus := p.PaymentStatus
+	// Retry verification relies on the original gateway binding. A failed
+	// self-update cannot first rebind the record to a different paid receipt.
+	recovering := req.PaymentStatus != nil && *req.PaymentStatus == string(types.PaymentStatusSucceeded)
+	if observedStatus == types.PaymentStatusFailed && !recovering &&
+		((req.PaymentGateway != nil && *req.PaymentGateway != lo.FromPtr(p.PaymentGateway)) ||
+			(req.GatewayPaymentID != nil && *req.GatewayPaymentID != lo.FromPtr(p.GatewayPaymentID))) {
+		return nil, retryVerificationError()
+	}
 
 	if req.PaymentStatus != nil {
 		// Payment status must follow the lifecycle: without this check the update
 		// API would accept any status for any payment, including settling one
 		// without the gateway ever being involved.
 		target := types.PaymentStatus(*req.PaymentStatus)
-		if err := p.PaymentStatus.ValidateTransitionTo(target); err != nil {
+		if observedStatus == types.PaymentStatusFailed && target == types.PaymentStatusSucceeded {
+			proof, err := s.verifyPaymentRetry(ctx, p, req)
+			if err != nil {
+				return nil, err
+			}
+			req.GatewayPaymentID = &proof.gatewayPaymentID
+			req.SucceededAt = &proof.succeededAt
+			req.ErrorMessage = lo.ToPtr("")
+		} else if err := p.PaymentStatus.ValidateTransitionTo(target); err != nil {
 			return nil, err
 		}
 		p.PaymentStatus = target
@@ -554,7 +571,10 @@ func (s *paymentService) DeletePayment(ctx context.Context, id string) error {
 	// deleting one removes it from reconciliation views while the money it
 	// records still moved. Void or refund such a payment instead, which keeps
 	// the record and its audit trail intact.
-	if !p.PaymentStatus.IsDeletable() {
+	boundRetry := p.PaymentStatus == types.PaymentStatusFailed &&
+		(lo.FromPtr(p.PaymentGateway) == string(types.PaymentGatewayTypeStripe) || lo.FromPtr(p.PaymentGateway) == string(types.PaymentGatewayTypePaystack)) &&
+		(lo.FromPtr(p.GatewayTrackingID) != "" || lo.FromPtr(p.GatewayPaymentID) != "")
+	if !p.PaymentStatus.IsDeletable() || boundRetry {
 		return ierr.NewError("payment cannot be deleted in its current status").
 			WithHintf("A payment in status %s cannot be deleted. Void or refund it instead.", p.PaymentStatus).
 			WithReportableDetails(map[string]any{
