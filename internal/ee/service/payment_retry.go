@@ -53,7 +53,7 @@ func (s *paymentService) verifyPaymentRetry(ctx context.Context, p *payment.Paym
 	}
 	if proof == nil || proof.gatewayPaymentID == "" || proof.succeededAt.IsZero() ||
 		proof.amountMinor <= 0 || proof.amountMinor != types.ToSmallestUnit(p.Amount, p.Currency) ||
-		!strings.EqualFold(proof.currency, p.Currency) || (proof.paymentID != "" && proof.paymentID != p.ID) {
+		!strings.EqualFold(proof.currency, p.Currency) || proof.paymentID != p.ID {
 		return nil, retryVerificationError()
 	}
 	trackingID := lo.FromPtr(p.GatewayTrackingID)
@@ -119,19 +119,20 @@ func (s *paymentService) readPaymentRetrySuccess(ctx context.Context, p *payment
 			return nil, err
 		}
 		intentID := lo.FromPtr(p.GatewayPaymentID)
-		if intentID == "" {
-			if trackingID == "" {
-				return nil, retryVerificationError()
-			}
+		if trackingID != "" {
 			session, err := integration.PaymentSvc.GetPaymentStatus(ctx, trackingID, types.GetEnvironmentID(ctx))
 			if err != nil {
 				return nil, err
 			}
 			if session == nil || session.SessionID != trackingID || session.PaymentIntentID == "" ||
+				(intentID != "" && session.PaymentIntentID != intentID) ||
 				(session.Metadata["flexprice_payment_id"] != "" && session.Metadata["flexprice_payment_id"] != p.ID) {
 				return nil, retryVerificationError()
 			}
 			intentID = session.PaymentIntentID
+		}
+		if intentID == "" {
+			return nil, retryVerificationError()
 		}
 		intent, err := integration.PaymentSvc.GetPaymentIntent(ctx, intentID, types.GetEnvironmentID(ctx))
 		if err != nil {

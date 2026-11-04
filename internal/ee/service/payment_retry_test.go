@@ -52,6 +52,7 @@ func TestVerifyPaymentRetry(t *testing.T) {
 		{"zero received amount", func(_ *payment.Payment, p *paymentRetryProof, _ *dto.UpdatePaymentRequest) { p.amountMinor = 0 }},
 		{"wrong currency", func(_ *payment.Payment, p *paymentRetryProof, _ *dto.UpdatePaymentRequest) { p.currency = "USD" }},
 		{"foreign metadata", func(_ *payment.Payment, p *paymentRetryProof, _ *dto.UpdatePaymentRequest) { p.paymentID = "foreign" }},
+		{"missing payment metadata", func(_ *payment.Payment, p *paymentRetryProof, _ *dto.UpdatePaymentRequest) { p.paymentID = "" }},
 		{"wrong reference", func(_ *payment.Payment, p *paymentRetryProof, _ *dto.UpdatePaymentRequest) {
 			p.gatewayTrackingID = "foreign"
 		}},
@@ -139,4 +140,33 @@ func (s *PaymentServiceSuite) TestFailedPaymentCannotSettleWithoutGatewayProof()
 	stored, err := s.GetStores().PaymentRepo.Get(ctx, p.ID)
 	s.Require().NoError(err)
 	s.Equal(types.PaymentStatusFailed, stored.PaymentStatus)
+}
+
+func (s *PaymentServiceSuite) TestFailedPaymentCannotRebindGatewayBeforeRetry() {
+	ctx := s.GetContext()
+	p, _, _ := retryFixture(ctx)
+	p.DestinationID = s.testData.invoice.ID
+	s.Require().NoError(s.GetStores().PaymentRepo.Create(ctx, p))
+	for _, req := range []dto.UpdatePaymentRequest{
+		{GatewayPaymentID: lo.ToPtr("foreign")},
+		{PaymentStatus: lo.ToPtr("FAILED"), GatewayPaymentID: lo.ToPtr("foreign")},
+		{PaymentGateway: lo.ToPtr("stripe")},
+	} {
+		_, err := s.service.UpdatePayment(ctx, p.ID, req)
+		s.Require().Error(err)
+	}
+	stored, err := s.GetStores().PaymentRepo.Get(ctx, p.ID)
+	s.Require().NoError(err)
+	s.Equal("42", lo.FromPtr(stored.GatewayPaymentID))
+	s.Equal("paystack", lo.FromPtr(stored.PaymentGateway))
+}
+
+func (s *PaymentServiceSuite) TestFailedHostedPaymentSurvivesForLateSuccess() {
+	ctx := s.GetContext()
+	p, _, _ := retryFixture(ctx)
+	p.DestinationID = s.testData.invoice.ID
+	s.Require().NoError(s.GetStores().PaymentRepo.Create(ctx, p))
+	s.Require().Error(s.service.DeletePayment(ctx, p.ID))
+	_, err := s.GetStores().PaymentRepo.Get(ctx, p.ID)
+	s.Require().NoError(err)
 }
