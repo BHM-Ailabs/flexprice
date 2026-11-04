@@ -192,7 +192,7 @@ func (l *PaymentLifecycle) RecordPaymentSuccess(ctx context.Context, params Reco
 			"flexprice_payment_id", params.FlexpricePaymentID,
 			"gateway_payment_id", params.GatewayPaymentID,
 		)
-	} else if existing.PaymentStatus.IsTerminal() {
+	} else if existing.PaymentStatus.IsTerminal() && existing.PaymentStatus != types.PaymentStatusFailed {
 		return ierr.NewError("payment is in a terminal state").
 			WithHint("Cannot transition to succeeded from current state").
 			WithReportableDetails(map[string]any{

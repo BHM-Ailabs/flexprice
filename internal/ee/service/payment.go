@@ -24,7 +24,8 @@ type PaymentService = interfaces.PaymentService
 
 type paymentService struct {
 	ServiceParams
-	idempGen *idempotency.Generator
+	idempGen           *idempotency.Generator
+	retrySuccessReader paymentRetrySuccessReader
 }
 
 // NewPaymentService creates a new payment service
@@ -408,7 +409,15 @@ func (s *paymentService) UpdatePayment(ctx context.Context, id string, req dto.U
 		// API would accept any status for any payment, including settling one
 		// without the gateway ever being involved.
 		target := types.PaymentStatus(*req.PaymentStatus)
-		if err := p.PaymentStatus.ValidateTransitionTo(target); err != nil {
+		if observedStatus == types.PaymentStatusFailed && target == types.PaymentStatusSucceeded {
+			proof, err := s.verifyPaymentRetry(ctx, p, req)
+			if err != nil {
+				return nil, err
+			}
+			req.GatewayPaymentID = &proof.gatewayPaymentID
+			req.SucceededAt = &proof.succeededAt
+			req.ErrorMessage = lo.ToPtr("")
+		} else if err := p.PaymentStatus.ValidateTransitionTo(target); err != nil {
 			return nil, err
 		}
 		p.PaymentStatus = target
